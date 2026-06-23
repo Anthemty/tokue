@@ -12,3 +12,6 @@ OCGTool.app/
 
 # Config
 config.json
+
+# Rust build artifacts
+target/

@@ -1,5 +1,5 @@
 APP       := OCGTool.app
-BINARY    := ocg
+BINARY    := target/release/ocg
 
 .PHONY: all build app run clean
 
@@ -7,8 +7,8 @@ all: app
 
 build: $(BINARY)
 
-$(BINARY): go.mod go.sum main.go app_darwin.go app_darwin.m ocg.go opencode.go deepseek.go minimax.go icon.go
-	CGO_ENABLED=1 go build -o $@ .
+$(BINARY): Cargo.toml build.rs app_darwin.m $(shell find src -name '*.rs')
+	cargo build --release
 
 app: $(BINARY)
 	rm -rf $(APP)
@@ -22,6 +22,5 @@ run: app
 	open $(APP)
 
 clean:
-	rm -rf $(BINARY) $(APP)
-	go clean -cache
+	rm -rf $(APP) target
 	@echo "✓ cleaned"

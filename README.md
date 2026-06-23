@@ -52,13 +52,13 @@ Config stored at `~/.config/ocg/config.json`. Old single-provider config files a
 ## Build
 
 ```bash
-make        # builds OCGTool.app
+make        # builds OCGTool.app (requires Rust + Xcode CLT)
 make run    # builds and opens the app
-make build  # plain binary
+make build  # plain binary at target/release/ocg
 ```
 
-Requires Go 1.22+ and Xcode Command Line Tools (CGO for the native AppKit shell).
+Requires Rust 1.80+ and Xcode Command Line Tools (for compiling the native AppKit shell and linking Cocoa). The Objective-C UI layer (`app_darwin.m`) is compiled via [`cc`](https://crates.io/crates/cc) in `build.rs`.
 
 ---
 
-**Version 0.0.2** — native NSPopover shell (replaces systray), monochrome template gauge icon, brand-logo sidebar, inline credential editing.
+**Version 0.0.2** — rewritten in Rust (replaces Go). Native NSPopover shell, monochrome template gauge icon, brand-logo sidebar, inline credential editing.
