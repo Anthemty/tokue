@@ -126,7 +126,7 @@ static const CGFloat kMinFontSize = 9.0;
     [self.sidebar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
     [self.sidebar.topAnchor constraintEqualToAnchor:self.view.topAnchor],
     [self.sidebar.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-    [self.sidebar.widthAnchor constraintEqualToConstant:36],
+    [self.sidebar.widthAnchor constraintEqualToConstant:22],
     [divider.leadingAnchor constraintEqualToAnchor:self.sidebar.trailingAnchor],
     [divider.topAnchor constraintEqualToAnchor:self.view.topAnchor],
     [divider.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
@@ -268,7 +268,7 @@ static const CGFloat kMinFontSize = 9.0;
     button.identifier = providerID;
     button.translatesAutoresizingMaskIntoConstraints = NO;
     button.wantsLayer = YES;
-    button.layer.cornerRadius = 5;
+    button.layer.cornerRadius = 4;
     if (isActive) {
       button.layer.backgroundColor = [[NSColor labelColor] colorWithAlphaComponent:0.08].CGColor;
     }
@@ -277,12 +277,14 @@ static const CGFloat kMinFontSize = 9.0;
 
     NSMutableArray *constraints = [NSMutableArray array];
     [constraints addObject:[button.centerXAnchor constraintEqualToAnchor:self.sidebar.centerXAnchor]];
-    [constraints addObject:[button.widthAnchor constraintEqualToConstant:26]];
-    [constraints addObject:[button.heightAnchor constraintEqualToConstant:26]];
+    // Square highlight box — the marks are square-ish, so a taller box looked
+    // stretched. 20pt in a 22pt rail keeps them hugging the edges.
+    [constraints addObject:[button.widthAnchor constraintEqualToConstant:20]];
+    [constraints addObject:[button.heightAnchor constraintEqualToConstant:20]];
     if (previous == nil) {
       [constraints addObject:[button.topAnchor constraintEqualToAnchor:self.sidebar.topAnchor constant:10]];
     } else {
-      [constraints addObject:[button.topAnchor constraintEqualToAnchor:previous.bottomAnchor constant:5]];
+      [constraints addObject:[button.topAnchor constraintEqualToAnchor:previous.bottomAnchor constant:6]];
     }
     [NSLayoutConstraint activateConstraints:constraints];
     previous = button;
