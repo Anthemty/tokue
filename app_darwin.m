@@ -31,10 +31,11 @@ static NSColor *OCGAdaptive(NSColor *dark, NSColor *light) {
                }];
 }
 
-/// Plenty of quota left — a soft emerald rather than systemGreen.
+/// Plenty of quota left — a muted sage green; the bar carries it, healthy rows
+/// keep neutral text so a long list does not glow.
 static NSColor *OCGOkColor(void) {
-  return OCGAdaptive([NSColor colorWithSRGBRed:0.38 green:0.76 blue:0.55 alpha:1.0],
-                     [NSColor colorWithSRGBRed:0.16 green:0.52 blue:0.35 alpha:1.0]);
+  return OCGAdaptive([NSColor colorWithSRGBRed:0.42 green:0.66 blue:0.55 alpha:1.0],
+                     [NSColor colorWithSRGBRed:0.26 green:0.48 blue:0.38 alpha:1.0]);
 }
 
 /// Less than 30% left.
@@ -103,6 +104,7 @@ static const CGFloat kMinFontSize = 9.0;
 /// Optional Codex meter toggles (default off).
 @property(strong) NSButton *showSpendToggle;
 @property(strong) NSButton *showTodayToggle;
+@property(strong) NSButton *showResetCreditsToggle;
 /// Codex meter reading: segment 0 = used, 1 = remaining (default).
 @property(strong) NSSegmentedControl *usedRemainingControl;
 - (void)renderAll;
@@ -588,15 +590,13 @@ static const CGFloat kMinFontSize = 9.0;
 /// One card per account: rounded panel, email/plan on the left, the CODEX_HOME
 /// on the right — so several logins never blur into one list.
 - (NSView *)cardViewWithTitle:(NSString *)title key:(NSString *)key {
+  // A card still groups each account, but its surface stays close to the
+  // popover background: just enough lift to see the boundary, no border, and
+  // the only colour on the panel is the quota status.
   NSView *card = [[NSView alloc] initWithFrame:NSZeroRect];
   card.wantsLayer = YES;
-  card.layer.cornerRadius = 7;
-  // A raised surface plus a hairline border: with a flat 5% fill the cards and
-  // the popover blurred into one grey field.
-  card.layer.backgroundColor = [[NSColor labelColor] colorWithAlphaComponent:0.10].CGColor;
-  card.layer.borderWidth = 1.0;
-  card.layer.borderColor =
-      [[NSColor labelColor] colorWithAlphaComponent:0.14].CGColor;
+  card.layer.cornerRadius = 6;
+  card.layer.backgroundColor = [[NSColor labelColor] colorWithAlphaComponent:0.04].CGColor;
 
   NSTextField *titleLabel =
       [self label:title size:11 weight:NSFontWeightSemibold color:[NSColor labelColor]];
@@ -656,13 +656,29 @@ static const CGFloat kMinFontSize = 9.0;
   return track;
 }
 
-/// Nil for rows that are not quota (credits, reset credits).
+/// Bar fill: the full three-state palette (green while there is room).
 - (NSColor *)severityColor:(NSDictionary *)meter {
   NSNumber *severity = meter[@"severity"];
   if (![severity isKindOfClass:[NSNumber class]]) {
     return nil;
   }
   return OCGStatusColor(severity.intValue);
+}
+
+/// Text colour: neutral while healthy, so only problems are coloured.
+- (NSColor *)severityTextColor:(NSDictionary *)meter {
+  NSNumber *severity = meter[@"severity"];
+  if (![severity isKindOfClass:[NSNumber class]]) {
+    return nil;
+  }
+  int used = severity.intValue;
+  if (used > 90) {
+    return OCGCritColor();
+  }
+  if (used > 70) {
+    return OCGWarnColor();
+  }
+  return nil; // labelColor
 }
 
 /// Structure colour: card surface, borders, inert bars.
@@ -682,7 +698,7 @@ static const CGFloat kMinFontSize = 9.0;
   NSColor *tint = [self severityColor:meter];
   NSTextField *label = [self label:[NSString stringWithFormat:@"%@  %.0f%%", labelText, percent]
                               size:11 weight:NSFontWeightSemibold
-                             color:(tint ?: [NSColor labelColor])];
+                             color:([self severityTextColor:meter] ?: [NSColor labelColor])];
   [label setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
   NSTextField *detail =
@@ -760,7 +776,7 @@ static const CGFloat kMinFontSize = 9.0;
   NSColor *tint = [self severityColor:meter];
   NSTextField *label = [self label:[NSString stringWithFormat:@"%@  %.0f%%", labelText, percent]
                               size:12 weight:NSFontWeightSemibold
-                             color:(tint ?: [NSColor labelColor])];
+                             color:([self severityTextColor:meter] ?: [NSColor labelColor])];
   NSTextField *detail = [self label:detailText size:11 weight:NSFontWeightRegular color:[NSColor secondaryLabelColor]];
   [detail setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
@@ -796,6 +812,7 @@ static const CGFloat kMinFontSize = 9.0;
   [self.codexAccountRows removeAllObjects];
   self.showSpendToggle = nil;
   self.showTodayToggle = nil;
+  self.showResetCreditsToggle = nil;
   self.usedRemainingControl = nil;
   for (NSView *view in [self.content.subviews copy]) {
     [view removeFromSuperview];
@@ -832,6 +849,19 @@ static const CGFloat kMinFontSize = 9.0;
     showToday.toolTip = @"Add a per-account row with quota burned since midnight";
     [self addRow:showToday height:20 previous:&previous topGap:6];
     self.showTodayToggle = showToday;
+
+    NSButton *showResetCredits =
+        [NSButton checkboxWithTitle:@"Show reset credits"
+                             target:self
+                             action:@selector(settingsEdited:)];
+    showResetCredits.state = [self.state[@"codex_show_reset_credits"] boolValue]
+                                 ? NSControlStateValueOn
+                                 : NSControlStateValueOff;
+    showResetCredits.controlSize = NSControlSizeMini;
+    showResetCredits.font = [NSFont systemFontOfSize:MAX(kMinFontSize, 11 + kPanelFontDelta)];
+    showResetCredits.toolTip = @"Add a row for the free window resets a plan grants";
+    [self addRow:showResetCredits height:20 previous:&previous topGap:6];
+    self.showResetCreditsToggle = showResetCredits;
 
     // Read the window meters as quota used or quota left.
     NSView *modeRow = [[NSView alloc] initWithFrame:NSZeroRect];
@@ -1139,6 +1169,10 @@ static const CGFloat kMinFontSize = 9.0;
     settings[@"show_spend"] = @(self.showSpendToggle.state == NSControlStateValueOn);
     if (self.showTodayToggle != nil) {
       settings[@"show_today"] = @(self.showTodayToggle.state == NSControlStateValueOn);
+    }
+    if (self.showResetCreditsToggle != nil) {
+      settings[@"show_reset_credits"] =
+          @(self.showResetCreditsToggle.state == NSControlStateValueOn);
     }
     if (self.usedRemainingControl != nil) {
       settings[@"show_remaining"] = @(self.usedRemainingControl.selectedSegment == 1);

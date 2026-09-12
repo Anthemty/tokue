@@ -332,6 +332,7 @@ pub extern "C" fn goSaveCodexAccounts(json: *const c_char) {
                 cfg.codex.show_spend = settings.show_spend;
                 cfg.codex.show_remaining = settings.show_remaining;
                 cfg.codex.show_today = settings.show_today;
+                cfg.codex.show_reset_credits = settings.show_reset_credits;
                 let _ = config::save(&mut cfg);
                 refresh_once();
             }
@@ -363,6 +364,7 @@ struct CodexSettings {
     show_spend: bool,
     show_remaining: bool,
     show_today: bool,
+    show_reset_credits: bool,
 }
 
 fn parse_codex_settings(json: &str) -> Option<CodexSettings> {
@@ -376,12 +378,14 @@ fn parse_codex_settings(json: &str) -> Option<CodexSettings> {
             show_spend: false,
             show_remaining: true,
             show_today: false,
+            show_reset_credits: false,
         }),
         serde_json::Value::Object(map) => Some(CodexSettings {
             accounts: parse_accounts(map.get("accounts")?)?,
             show_spend: flag(map, "show_spend", false),
             show_remaining: flag(map, "show_remaining", true),
             show_today: flag(map, "show_today", false),
+            show_reset_credits: flag(map, "show_reset_credits", false),
         }),
         _ => None,
     }
@@ -488,6 +492,7 @@ mod tests {
         assert!(!settings.show_spend);
         assert!(settings.show_remaining, "remaining is the default reading");
         assert!(!settings.show_today, "the today row is opt-in");
+        assert!(!settings.show_reset_credits, "reset credits are opt-in");
     }
 
     #[test]
@@ -509,7 +514,8 @@ mod tests {
         let settings = parse_codex_settings(
             r#"{"accounts":[{"home":"~/.codex","label":"","enabled":0},
                             {"home":"~/.codex2","label":"","enabled":1}],
-                "show_spend":0,"show_remaining":1,"show_today":0}"#,
+                "show_spend":0,"show_remaining":1,"show_today":0,
+                "show_reset_credits":1}"#,
         )
         .unwrap();
         assert!(!settings.accounts[0].enabled);
@@ -517,6 +523,7 @@ mod tests {
         assert!(!settings.show_spend);
         assert!(settings.show_remaining);
         assert!(!settings.show_today);
+        assert!(settings.show_reset_credits, "numeric 1 means on");
     }
 
     #[test]

@@ -22,6 +22,7 @@ struct PanelState {
     codex_show_spend: bool,
     codex_show_remaining: bool,
     codex_show_today: bool,
+    codex_show_reset_credits: bool,
 }
 
 #[derive(Serialize)]
@@ -80,6 +81,7 @@ pub fn build_json(cfg: &Config) -> String {
         codex_show_spend: cfg.codex.show_spend,
         codex_show_remaining: cfg.codex.show_remaining,
         codex_show_today: cfg.codex.show_today,
+        codex_show_reset_credits: cfg.codex.show_reset_credits,
     };
 
     for &id in PROVIDERS {

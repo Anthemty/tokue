@@ -601,6 +601,7 @@ pub struct MeterOptions {
     pub show_spend: bool,
     pub show_remaining: bool,
     pub show_today: bool,
+    pub show_reset_credits: bool,
     /// Quota burned since local midnight (percent-of-window units).
     pub today_consumed: Option<f64>,
 }
@@ -694,7 +695,7 @@ fn meters_for(
         meters.push(UsageMeter::grouped(title.clone(), "Credits".to_string(), 0, detail));
     }
     if let Some(count) = snap.reset_credits {
-        if count > 0 {
+        if opts.show_reset_credits && count > 0 {
             meters.push(UsageMeter::grouped(
                 title.clone(),
                 "Reset credits".to_string(),
@@ -878,6 +879,7 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
             show_spend: cfg.codex.show_spend,
             show_remaining: cfg.codex.show_remaining,
             show_today: cfg.codex.show_today,
+            show_reset_credits: cfg.codex.show_reset_credits,
             today_consumed: today.get(&outcome.acct.home).copied(),
         };
         match (&outcome.snap, &outcome.err) {

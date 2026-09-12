@@ -68,6 +68,10 @@ pub struct CodexConfig {
     /// computed from the SQLite history). Off by default.
     #[serde(rename = "show_today", default)]
     pub show_today: bool,
+    /// Show the "Reset credits" row (free window resets the plan grants). Off
+    /// by default: it is not quota and most accounts never have any.
+    #[serde(rename = "show_reset_credits", default)]
+    pub show_reset_credits: bool,
     /// Legacy API-billing fields (pre-subscription builds). Loaded so old
     /// configs keep parsing, dropped on the next save. `allow(dead_code)`
     /// because nothing reads them any more.
