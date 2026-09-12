@@ -133,7 +133,7 @@ static const CGFloat kMinFontSize = 9.0;
 }
 
 - (void)loadView {
-  NSRect frame = NSMakeRect(0, 0, 260, 360);
+  NSRect frame = NSMakeRect(0, 0, 272, 360);
   self.view = [[NSView alloc] initWithFrame:frame];
   // Single unified background across the whole popover — no sidebar tint.
   self.view.wantsLayer = YES;
@@ -178,7 +178,7 @@ static const CGFloat kMinFontSize = 9.0;
   self.scrollHeightConstraint = [self.scrollView.heightAnchor constraintEqualToConstant:220];
   // Fixed width: long account titles truncate (with a tooltip) instead of
   // stretching the popover.
-  [self.view.widthAnchor constraintEqualToConstant:260].active = YES;
+  [self.view.widthAnchor constraintEqualToConstant:272].active = YES;
   [NSLayoutConstraint activateConstraints:@[
     [self.sidebar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
     [self.sidebar.topAnchor constraintEqualToAnchor:self.view.topAnchor],
@@ -246,7 +246,7 @@ static const CGFloat kMinFontSize = 9.0;
     self.scrollHeightConstraint.constant = scrollHeight;
     [self.view layoutSubtreeIfNeeded];
   }
-  NSSize size = NSMakeSize(260, scrollHeight + chrome);
+  NSSize size = NSMakeSize(272, scrollHeight + chrome);
   if (!NSEqualSizes(self.preferredContentSize, size)) {
     self.preferredContentSize = size;
     if (getenv("OCG_DEBUG_SIZE") != NULL) {
@@ -527,8 +527,8 @@ static const CGFloat kMinFontSize = 9.0;
     [self addRow:errLabel height:44 previous:&previous topGap:12];
   } else {
     NSTextField *updated =
-        [self label:updatedText size:11 weight:NSFontWeightRegular color:[NSColor secondaryLabelColor]];
-    [self addRow:updated height:16 previous:&previous topGap:4];
+        [self label:updatedText size:9 weight:NSFontWeightRegular color:[NSColor tertiaryLabelColor]];
+    [self addRow:updated height:13 previous:&previous topGap:4];
 
     NSArray *meters = result[@"meters"] ?: @[];
     NSView *card = nil;     // current account card
@@ -546,7 +546,7 @@ static const CGFloat kMinFontSize = 9.0;
             [cardLast.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-6],
           ]];
         }
-        card = [self cardViewWithTitle:group key:key];
+        card = [self cardViewWithTitle:group badge:meter[@"badge"] key:key];
         card.identifier = group;
         cardLast = [card viewWithTag:1]; // the title label
         [self addCard:card previous:&previous];
@@ -611,7 +611,9 @@ static const CGFloat kMinFontSize = 9.0;
 
 /// One card per account: rounded panel, email/plan on the left, the CODEX_HOME
 /// on the right — so several logins never blur into one list.
-- (NSView *)cardViewWithTitle:(NSString *)title key:(NSString *)key {
+- (NSView *)cardViewWithTitle:(NSString *)title
+                        badge:(NSString *)badge
+                          key:(NSString *)key {
   // A card still groups each account, but its surface stays close to the
   // popover background: just enough lift to see the boundary, no border, and
   // the only colour on the panel is the quota status.
@@ -639,9 +641,26 @@ static const CGFloat kMinFontSize = 9.0;
     [titleLabel.topAnchor constraintEqualToAnchor:card.topAnchor constant:6],
     [homeLabel.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-9],
     [homeLabel.firstBaselineAnchor constraintEqualToAnchor:titleLabel.firstBaselineAnchor],
-    [homeLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:titleLabel.trailingAnchor
-                                                         constant:6],
   ]];
+
+  // 计划名徽标：跟在标题后，空间不足时最先让位。
+  if ([badge isKindOfClass:[NSString class]] && badge.length > 0) {
+    NSTextField *badgeLabel =
+        [self label:badge size:8 weight:NSFontWeightSemibold color:[NSColor secondaryLabelColor]];
+    badgeLabel.wantsLayer = YES;
+    badgeLabel.layer.cornerRadius = 3;
+    badgeLabel.layer.backgroundColor =
+        [[NSColor labelColor] colorWithAlphaComponent:0.12].CGColor;
+    [badgeLabel.heightAnchor constraintEqualToConstant:12].active = YES;
+    [card addSubview:badgeLabel];
+    [NSLayoutConstraint activateConstraints:@[
+      [badgeLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:titleLabel.trailingAnchor
+                                                            constant:5],
+      [badgeLabel.trailingAnchor constraintLessThanOrEqualToAnchor:homeLabel.leadingAnchor
+                                                          constant:-4],
+      [badgeLabel.firstBaselineAnchor constraintEqualToAnchor:titleLabel.firstBaselineAnchor],
+    ]];
+  }
   return card;
 }
 
@@ -1130,7 +1149,8 @@ static const CGFloat kMinFontSize = 9.0;
   NSButton *gear =
       [NSButton buttonWithTitle:@"" target:self action:@selector(toggleSettings:)];
   // Toggle icon: gear when on usage view, chart when on settings view.
-  NSString *symbol = self.settingsVisible ? @"chart.bar.fill" : @"gearshape";
+  // Settings shows a back chevron: the tap target is "return to usage".
+  NSString *symbol = self.settingsVisible ? @"chevron.left" : @"gearshape";
   gear.image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:symbol];
   gear.imagePosition = NSImageOnly;
   gear.bordered = NO;
@@ -1423,7 +1443,7 @@ static const CGFloat kMinFontSize = 9.0;
   written = YES;
 
   NSWindow *offscreen = [[NSWindow alloc]
-      initWithContentRect:NSMakeRect(0, 0, 260, 546)
+      initWithContentRect:NSMakeRect(0, 0, 272, 546)
                 styleMask:NSWindowStyleMaskBorderless
                   backing:NSBackingStoreBuffered
                     defer:NO];
@@ -1432,8 +1452,8 @@ static const CGFloat kMinFontSize = 9.0;
     self.controller.settingsVisible = YES;
   }
   // viewWillAppear never fires for an off-screen window, so render by hand.
-  self.controller.preferredContentSize = NSMakeSize(260, 546);
-  [self.controller.view setFrameSize:NSMakeSize(260, 546)];
+  self.controller.preferredContentSize = NSMakeSize(272, 546);
+  [self.controller.view setFrameSize:NSMakeSize(272, 546)];
   [self.controller renderAll];
   [self.controller.view layoutSubtreeIfNeeded];
   // Follow whatever height the content asked for (a tall account list would

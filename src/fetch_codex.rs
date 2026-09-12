@@ -622,18 +622,10 @@ fn meters_for(
         acct.display_name()
     };
     let plan = if !snap.plan.is_empty() { snap.plan.clone() } else { acct.plan.clone() };
-    if !plan.is_empty() {
-        title.push_str(" · ");
-        title.push_str(&codex_accounts::plan_display(&plan));
-    }
     // Two homes can hold the same account; the card header shows each home on
     // its own line, so the title only marks that the quota is shared.
     if acct.duplicate_of.is_some() {
         title = format!("{} ⧉", title);
-    }
-    if snap.limit_reached {
-        title.push_str(" · ");
-        title.push_str(snap.reached_note.as_deref().unwrap_or("limit reached"));
     }
     if stale {
         title.push_str(" · cached");
@@ -712,8 +704,14 @@ fn meters_for(
             "no usage data returned".to_string(),
         ));
     }
+    let plan_badge = if plan.is_empty() {
+        None
+    } else {
+        Some(codex_accounts::plan_display(&plan))
+    };
     for meter in meters.iter_mut() {
         meter.key = Some(account_key.clone());
+        meter.badge = plan_badge.clone();
         // Credits / reset credits are not quota: no amber/red.
         if meter.label == "Credits" || meter.label == "Reset credits" {
             meter.severity = None;

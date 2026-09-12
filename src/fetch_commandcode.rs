@@ -153,6 +153,7 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
             format!("{:.1} / {:.0} cr · {}", used, cap, reset),
         );
         meter.severity = Some(used_percent.round() as i32);
+        meter.badge = Some(plan_display(plan_id));
         meters.push(meter);
     }
 

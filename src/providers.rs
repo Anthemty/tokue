@@ -43,6 +43,9 @@ pub struct UsageMeter {
     /// remaining < 30% (severity > 70) amber, remaining < 10% (severity > 90) red.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub severity: Option<i32>,
+    /// Small badge in the card header (e.g. the plan name).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub badge: Option<String>,
 }
 
 impl UsageMeter {
@@ -55,6 +58,7 @@ impl UsageMeter {
             group: None,
             key: None,
             severity: Some(percent.clamp(0, 100)),
+            badge: None,
         }
     }
 
@@ -72,6 +76,7 @@ impl UsageMeter {
             group: Some(group.into()),
             key: None,
             severity: Some(percent.clamp(0, 100)),
+            badge: None,
         }
     }
 }
