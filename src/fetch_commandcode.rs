@@ -33,6 +33,26 @@ struct AuthFile {
     user_name: String,
 }
 
+/// planId → monthly credits, from the CLI's own plan table.
+fn plan_monthly_credits(plan_id: &str) -> Option<f64> {
+    let credits = match plan_id {
+        "individual-go" => 10.0,
+        "individual-goat" => 70.0,
+        "individual-pro" | "individual-pro-v1" => 30.0,
+        "individual-provider" => 15.0,
+        "individual-max" => 150.0,
+        "individual-ultra" => 300.0,
+        "teams-pro" => 40.0,
+        _ => return None,
+    };
+    Some(credits)
+}
+
+/// Numeric field with a floor of zero.
+fn f(value: &serde_json::Value, key: &str) -> f64 {
+    value.get(key).and_then(|x| x.as_f64()).unwrap_or(0.0).max(0.0)
+}
+
 pub fn fetch(cfg: &Config) -> ProviderFetchResult {
     let auth = match read_auth() {
         Some(a) => a,
@@ -62,6 +82,11 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
         format!("?orgId={}", org_id)
     };
 
+    let summary = match get(&client, &auth.api_key, &format!("/alpha/usage/summary{}", org_query)) {
+        Ok(v) => v,
+        Err(e) => return ProviderFetchResult::err(e),
+    };
+    let summary_total = f(&summary, "totalCost");
     let billing = match get(&client, &auth.api_key, &format!("/alpha/billing/credits{}", org_query)) {
         Ok(v) => v,
         Err(e) => return ProviderFetchResult::err(e),
@@ -88,6 +113,12 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
         title.push_str(" · ");
         title.push_str(&plan_display(plan_id));
     }
+
+    let status = subscription.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    let monthly_remaining = f(&credits, "monthlyCredits");
+    let purchased_remaining = f(&credits, "purchasedCredits");
+    let free_remaining = f(&credits, "freeCredits");
+    let total_remaining = monthly_remaining + purchased_remaining + free_remaining;
 
     let mut meters: Vec<UsageMeter> = Vec::new();
     let mut worst = 0i32;
@@ -125,25 +156,54 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
         meters.push(meter);
     }
 
-    // Credit balance is informational: monthly/purchased/free remaining.
-    let monthly = credits.get("monthlyCredits").and_then(|v| v.as_f64());
-    let purchased = credits.get("purchasedCredits").and_then(|v| v.as_f64());
-    let free = credits.get("freeCredits").and_then(|v| v.as_f64());
-    if let (Some(monthly), Some(purchased), Some(free)) = (monthly, purchased, free) {
+    // Monthly pool: an active subscription caps the plan's monthly credits.
+    // Same pool math as the CLI's projectUsageView.
+    let plan_monthly = if status == "active" {
+        plan_monthly_credits(plan_id)
+    } else {
+        None
+    };
+    let total_pool = match plan_monthly {
+        Some(plan) => plan.max(monthly_remaining) + purchased_remaining + free_remaining,
+        None => summary_total + total_remaining,
+    };
+    if total_pool > 0.0 {
+        let monthly_used = (total_pool - total_remaining).max(0.0);
+        let used_percent = (monthly_used / total_pool * 100.0).clamp(0.0, 100.0);
+        let display = if show_remaining {
+            100.0 - used_percent
+        } else {
+            used_percent
+        };
+        let days_left = subscription
+            .get("currentPeriodEnd")
+            .and_then(period_end_days)
+            .map(|d| d.to_string())
+            .unwrap_or_else(|| "?".to_string());
         let mut meter = UsageMeter::grouped(
-            title,
-            "Credits",
-            0,
+            title.clone(),
+            "Monthly",
+            display.round() as i32,
             format!(
-                "{:.1} monthly · {:.1} purchased · {:.1} free",
-                monthly.max(0.0),
-                purchased.max(0.0),
-                free.max(0.0)
+                "{:.1} / {:.0} cr · renews in {}d",
+                total_remaining, total_pool, days_left
             ),
         );
-        meter.severity = None;
+        meter.severity = Some(used_percent.round() as i32);
         meters.push(meter);
     }
+
+    // Credit balance is informational: monthly/purchased/free remaining.
+    let mut parts: Vec<String> = vec![format!("{:.1} monthly", monthly_remaining)];
+    if purchased_remaining > 0.0 {
+        parts.push(format!("{:.1} purchased", purchased_remaining));
+    }
+    if free_remaining > 0.0 {
+        parts.push(format!("{:.1} free", free_remaining));
+    }
+    let mut meter = UsageMeter::grouped(title, "Credits", 0, parts.join(" · "));
+    meter.severity = None;
+    meters.push(meter);
 
     if meters.is_empty() {
         return ProviderFetchResult::err("no usage data returned");
@@ -290,6 +350,20 @@ fn format_reset_clock(reset_at_ms: i64) -> String {
     }
 }
 
+/// currentPeriodEnd（ISO 字符串或 epoch 毫秒）→ 距今整天数。
+fn period_end_days(value: &serde_json::Value) -> Option<i64> {
+    let end_ms = match value {
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::String(s) => {
+            let parsed = chrono::DateTime::parse_from_rfc3339(s).ok()?;
+            Some(parsed.timestamp_millis() as f64)
+        }
+        _ => None,
+    }?;
+    let now_ms = chrono::Utc::now().timestamp_millis() as f64;
+    Some(((end_ms - now_ms) / 86_400_000.0).ceil() as i64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,6 +387,18 @@ mod tests {
         assert_eq!(format_reset_clock(ms), "3/5 09:30", "another day shows the date");
         let ms = Local.with_ymd_and_hms(2026, 9, 17, 18, 41, 0).unwrap().timestamp_millis();
         assert_eq!(format_reset_clock(ms), "9/17 18:41");
+    }
+
+    #[test]
+    fn monthly_pool_follows_the_cli_math() {
+        // Goat = 70 credits；月度剩余 50.37，无购入/免费 → 已用 ≈ 19.63
+        let plan = plan_monthly_credits("individual-goat").unwrap();
+        let monthly_remaining = 50.3734994493f64;
+        let pool = plan.max(monthly_remaining) + 0.0 + 0.0;
+        let used = (pool - monthly_remaining).max(0.0);
+        assert!((pool - 70.0).abs() < 0.01);
+        assert!((used - 19.63).abs() < 0.01);
+        assert!(((used / pool * 100.0) - 28.05).abs() < 0.1);
     }
 
     #[test]
