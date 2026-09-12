@@ -113,6 +113,7 @@ Environment switches (all optional):
 | `OCG_SNAPSHOT_SETTINGS=1` | Capture the settings pane instead of the usage pane |
 | `OCG_AUTOOPEN=1` | Open the popover shortly after launch |
 | `OCG_STATUS_TITLE="42%"` | Force the menu bar badge text |
+| `OCG_DEBUG_SIZE=1` | Log every popover height decision (content vs screen cap) |
 
 ## Build
 
