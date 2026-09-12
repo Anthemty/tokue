@@ -1,6 +1,6 @@
 # ocg — Usage Monitor (macOS Menu Bar)
 
-Multi-provider usage monitor for the macOS menu bar. Currently supports **OpenCode Go**, **DeepSeek** (balance), **MiniMax** (token plan quota), and **Codex** (ChatGPT subscription usage for every `~/.codex*` login). Click the menu bar icon to open a native popover: a left sidebar shows each provider's brand logo, the right pane shows that provider's usage as progress bars. Switch providers by clicking a sidebar icon; configure credentials inline from the ⚙ Settings view.
+Multi-provider usage monitor for the macOS menu bar. Currently supports **OpenCode Go**, **DeepSeek** (balance), **MiniMax** (token plan quota), **Codex** (ChatGPT subscription usage for every `~/.codex*` login) and **Command Code** (commandcode.ai credits and 5h/weekly windows). Providers can be switched on/off in the settings pane, and all configuration lives in the SQLite store. Click the menu bar icon to open a native popover: a left sidebar shows each provider's brand logo, the right pane shows that provider's usage as progress bars. Switch providers by clicking a sidebar icon; configure credentials inline from the ⚙ Settings view.
 
 The menu bar icon is a monochrome template gauge — a ring that fills proportionally to the worst usage across all providers, tinted automatically to match light/dark mode — with a percentage badge next to it (amber from 50%, red from 80%).
 
@@ -54,6 +54,12 @@ Shows subscription usage for **every ChatGPT login on the machine**, not an API-
 - **Colour system**: quota rows read status by colour — **green** while there is room, **amber** under 30% left, **red** under 10%; grey is reserved for structure (bar tracks, separators, reset times) and for rows that are not quota (credits). Each account sits on a raised, bordered card, and the popover grows to fit every account instead of scrolling.
 - **Settings**: rename an account inline, enable/disable it, switch the meter reading between **Used** and **Remaining** (default: remaining, shown as `5h left 43%`), and toggle the optional **Show spend limit** and **Show today's usage** rows (both off by default).
 - The menu bar badge keeps reporting the worst *used* percentage across all providers, so its colour and the gauge fill always mean "how close to the limit".
+
+### Command Code
+Reads `~/.commandcode/auth.json` (read-only) and calls the CLI's own endpoints on `api.commandcode.ai`: credits (monthly/purchased/free remaining) plus the 5h and weekly `windowLimits` with their reset times. Cloudflare fronts that API, so calls that get fingerprint-blocked fall back to the system curl.
+
+### Config in SQLite
+Configuration lives in the `config` table of `ocg.db` (same store as the usage history). An existing `config.json` is imported once and renamed to `config.json.migrated`. Provider enable switches also live there; a provider that is switched off stops being fetched and leaves the sidebar and panel until it is re-enabled.
 
 ## Setup
 
@@ -126,6 +132,8 @@ make build  # plain binary at target/release/ocg
 Requires Rust 1.80+ and Xcode Command Line Tools (for compiling the native AppKit shell and linking Cocoa). The Objective-C UI layer (`app_darwin.m`) is compiled via [`cc`](https://crates.io/crates/cc) in `build.rs`.
 
 ---
+
+**Version 0.0.6** — Command Code provider (credits + 5h/weekly windows), per-provider enable switches in settings, and configuration moved into the SQLite store.
 
 **Version 0.0.5** — usage history in SQLite (`ocg.db`): window samples + last-good snapshots, an opt-in per-account "Today" row, and `--once stats`.
 

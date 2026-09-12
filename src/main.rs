@@ -11,6 +11,7 @@
 mod codex_accounts;
 mod config;
 mod fetch_codex;
+mod fetch_commandcode;
 mod fetch_deepseek;
 mod fetch_minimax;
 mod fetch_opencode;
@@ -71,6 +72,7 @@ fn run_once_cli(args: &[String]) {
         "opencode" => fetch_opencode::fetch(&cfg),
         "deepseek" => fetch_deepseek::fetch(&cfg),
         "minimax" => fetch_minimax::fetch(&cfg),
+        "commandcode" => fetch_commandcode::fetch(&cfg),
         other => {
             eprintln!("unknown provider: {}", other);
             std::process::exit(2);
@@ -124,8 +126,18 @@ fn refresh_once() {
 /// Spawn one thread per provider, collect results into the cache.
 fn fetch_all_providers() {
     let cfg = config::load();
+    {
+        // Disabled providers leave the panel entirely: no cache, no badge, no rows.
+        let mut cache = state::PROVIDER_CACHE.write().unwrap();
+        for &p in PROVIDERS {
+            if !cfg.provider_enabled(p) {
+                cache.remove(p);
+            }
+        }
+    }
     let handles: Vec<_> = PROVIDERS
         .iter()
+        .filter(|&&p| cfg.provider_enabled(p))
         .map(|&p| {
             let cfg = cfg.clone();
             thread::spawn(move || {
@@ -166,6 +178,7 @@ fn fetch_provider(name: &str, cfg: &config::Config) -> ProviderFetchResult {
         "deepseek" => fetch_deepseek::fetch(cfg),
         "minimax" => fetch_minimax::fetch(cfg),
         "codex" => fetch_codex::fetch(cfg),
+        "commandcode" => fetch_commandcode::fetch(cfg),
         other => ProviderFetchResult::err(format!("unknown provider: {}", other)),
     }
 }
@@ -314,6 +327,33 @@ pub extern "C" fn goSaveCredentials(
             _ => false,
         };
         if matched {
+            let _ = config::save(&mut cfg);
+            refresh_once();
+        }
+    });
+}
+
+/// Save the per-provider enable switches ({"opencode":true,…}) and refetch.
+#[no_mangle]
+pub extern "C" fn goSaveProviderEnabled(json: *const c_char) {
+    let payload = unsafe { cstr_to_string(json) };
+    thread::spawn(move || {
+        let mut cfg = config::load();
+        let value: serde_json::Value = match serde_json::from_str(&payload) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        if let Some(map) = value.as_object() {
+            for (id, on) in map {
+                let enabled = on.as_bool().unwrap_or(true);
+                cfg.set_provider_enabled(id, enabled);
+                if !enabled && cfg.active_provider == *id {
+                    cfg.active_provider = cfg
+                        .first_enabled_provider()
+                        .unwrap_or(crate::providers::OPENCODE)
+                        .to_string();
+                }
+            }
             let _ = config::save(&mut cfg);
             refresh_once();
         }

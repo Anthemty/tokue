@@ -29,6 +29,7 @@ struct PanelState {
 struct PanelProvider {
     id: String,
     label: String,
+    enabled: bool,
 }
 
 /// One row in the Codex account settings list.
@@ -88,7 +89,14 @@ pub fn build_json(cfg: &Config) -> String {
         state.providers.push(PanelProvider {
             id: id.to_string(),
             label: label(id).to_string(),
+            enabled: cfg.provider_enabled(id),
         });
+    }
+    // A disabled provider must not stay selected.
+    if !cfg.provider_enabled(&state.active) {
+        if let Some(first) = PROVIDERS.iter().copied().find(|id| cfg.provider_enabled(id)) {
+            state.active = first.to_string();
+        }
     }
 
     // Snapshot cache under read lock.
@@ -99,7 +107,7 @@ pub fn build_json(cfg: &Config) -> String {
         let result = match cache.get(id) {
             None => PanelResult {
                 criticality: 0,
-                error: Some("not fetched".to_string()),
+                error: (!cfg.provider_enabled(id)).then(|| ()).and(None),
                 meters: None,
             },
             Some(r) => {

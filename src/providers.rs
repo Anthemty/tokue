@@ -7,9 +7,10 @@ pub const OPENCODE: &str = "opencode";
 pub const DEEPSEEK: &str = "deepseek";
 pub const MINIMAX: &str = "minimax";
 pub const CODEX: &str = "codex";
+pub const COMMANDCODE: &str = "commandcode";
 
 /// All known providers, in sidebar order.
-pub const PROVIDERS: &[&str] = &[OPENCODE, DEEPSEEK, MINIMAX, CODEX];
+pub const PROVIDERS: &[&str] = &[OPENCODE, DEEPSEEK, MINIMAX, CODEX, COMMANDCODE];
 
 /// Display label for a provider id.
 pub fn label(id: &str) -> &'static str {
@@ -18,6 +19,7 @@ pub fn label(id: &str) -> &'static str {
         DEEPSEEK => "DeepSeek",
         MINIMAX => "MiniMax",
         CODEX => "Codex",
+        COMMANDCODE => "Command Code",
         _ => "Unknown",
     }
 }

@@ -9,6 +9,9 @@ use std::io;
 use std::path::PathBuf;
 
 use crate::providers;
+use crate::store;
+
+pub const CONFIG_KEY: &str = "config";
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -25,6 +28,27 @@ pub struct Config {
     pub minimax: MinimaxConfig,
     #[serde(default)]
     pub codex: CodexConfig,
+    /// Per-provider enable switches; a missing entry means enabled.
+    #[serde(rename = "provider_enabled", default)]
+    pub provider_enabled: std::collections::BTreeMap<String, bool>,
+}
+
+impl Config {
+    pub fn provider_enabled(&self, id: &str) -> bool {
+        self.provider_enabled.get(id).copied().unwrap_or(true)
+    }
+
+    pub fn set_provider_enabled(&mut self, id: &str, enabled: bool) {
+        self.provider_enabled.insert(id.to_string(), enabled);
+    }
+
+    /// First enabled provider, for falling back off a disabled active one.
+    pub fn first_enabled_provider(&self) -> Option<&'static str> {
+        providers::PROVIDERS
+            .iter()
+            .copied()
+            .find(|id| self.provider_enabled(id))
+    }
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -130,8 +154,9 @@ pub fn cache_dir() -> io::Result<PathBuf> {
     Ok(dir)
 }
 
-/// Load config, migrating legacy format if needed. Never fails: on any error
-/// returns a default config with active_provider = opencode (matches Go loadCfg).
+/// Load config from the SQLite store, migrating the legacy config.json once.
+/// Never fails: on any error returns a default config with
+/// active_provider = opencode (matches Go loadCfg).
 pub fn load() -> Config {
     match load_inner() {
         Ok(cfg) => cfg,
@@ -144,45 +169,44 @@ fn default_config() -> Config {
 }
 
 fn load_inner() -> io::Result<Config> {
+    // 1. The database is the source of truth.
+    if let Some(json) = store::load_config(CONFIG_KEY) {
+        let mut cfg: Config = serde_json::from_str(&json).unwrap_or_else(|_| default_config());
+        normalise(&mut cfg);
+        return Ok(cfg);
+    }
+
+    // 2. One-time migration from the legacy config.json.
     let path = config_path()?;
     let data = match fs::read(&path) {
         Ok(d) => d,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(default_config()),
         Err(e) => return Err(e),
     };
-
-    // Try new format first.
-    let mut cfg: Config = match serde_json::from_slice(&data) {
-        Ok(c) => c,
-        Err(_) => return Ok(default_config()),
-    };
-
-    // Detect legacy top-level workspace_id/auth_cookie and migrate.
+    let mut cfg: Config = serde_json::from_slice(&data).unwrap_or_else(|_| default_config());
     if let Ok(old) = serde_json::from_slice::<LegacyConfig>(&data) {
         if !old.workspace_id.is_empty() || !old.auth_cookie.is_empty() {
             cfg.opencode.workspace_id = old.workspace_id;
             cfg.opencode.auth_cookie = old.auth_cookie;
-            if cfg.active_provider.is_empty() {
-                cfg.active_provider = providers::OPENCODE.to_string();
-            }
-            let _ = save(&mut cfg); // persist migrated form
         }
     }
-
-    if cfg.active_provider.is_empty() {
-        cfg.active_provider = providers::OPENCODE.to_string();
-    }
+    normalise(&mut cfg);
+    let _ = save(&mut cfg);
+    let _ = fs::rename(&path, path.with_extension("json.migrated"));
     Ok(cfg)
 }
 
-/// Save config (2-space indented JSON, 0600). Ensures active_provider is set.
-pub fn save(cfg: &mut Config) -> io::Result<()> {
+fn normalise(cfg: &mut Config) {
     if cfg.active_provider.is_empty() {
         cfg.active_provider = providers::OPENCODE.to_string();
     }
-    let path = config_path()?;
-    let data = serde_json::to_vec_pretty(cfg).unwrap_or_default();
-    // 2-space indentation (serde_json::to_vec_pretty already uses 2 spaces).
-    fs::write(path, data)?;
+}
+
+/// Save config into the database as pretty JSON.
+pub fn save(cfg: &mut Config) -> io::Result<()> {
+    normalise(cfg);
+    let data = serde_json::to_string_pretty(cfg)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    store::save_config(CONFIG_KEY, &data);
     Ok(())
 }

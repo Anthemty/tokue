@@ -91,6 +91,10 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
          );
          CREATE INDEX IF NOT EXISTS samples_lookup
              ON samples(provider, account, metric, ts);
+         CREATE TABLE IF NOT EXISTS config (
+             key   TEXT PRIMARY KEY,
+             value TEXT NOT NULL
+         );
          CREATE TABLE IF NOT EXISTS snapshots (
              provider TEXT    NOT NULL,
              account  TEXT    NOT NULL,
@@ -365,8 +369,35 @@ pub fn summary() -> serde_json::Value {
 }
 
 // ---------------------------------------------------------------------------
-// One-time import of the pre-SQLite JSON cache
+// Config storage (the JSON document lives in the database, not on disk)
 // ---------------------------------------------------------------------------
+
+pub fn load_config(key: &str) -> Option<String> {
+    let guard = DB.lock().ok()?;
+    let conn = guard.as_ref()?;
+    conn.query_row(
+        "SELECT value FROM config WHERE key = ?1",
+        params![key],
+        |r| r.get(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+}
+
+pub fn save_config(key: &str, value: &str) {
+    with_db(|conn| {
+        conn.execute(
+            "INSERT INTO config(key, value) VALUES(?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    });
+}
+
+/// One-time import of the pre-SQLite JSON cache
+/// ---------------------------------------------------------------------------
 
 fn import_legacy_cache(conn: &Connection) {
     let path = match config::cache_dir() {

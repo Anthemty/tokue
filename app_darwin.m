@@ -6,6 +6,7 @@ extern void goProviderSelected(const char *providerID);
 extern void goRefreshRequested(void);
 extern void goSaveCredentials(const char *provider, const char *field, const char *value);
 extern void goSaveCodexAccounts(const char *accountsJSON);
+extern void goSaveProviderEnabled(const char *providersJSON);
 extern void goRescanCodexAccounts(void);
 extern void goQuitRequested(void);
 
@@ -101,6 +102,10 @@ static const CGFloat kMinFontSize = 9.0;
 @property(strong) NSMutableDictionary<NSString *, NSTextField *> *fieldInputs;
 /// Rows of the Codex account editor: @{@"home", @"checkbox", @"labelField"}.
 @property(strong) NSMutableArray<NSDictionary *> *codexAccountRows;
+/// Provider tick boxes in the settings pane: @{@"id", @"checkbox"}.
+@property(strong) NSMutableArray<NSDictionary *> *providerCheckboxRows;
+/// Providers hidden locally; Save & Refresh persists the choice.
+@property(strong) NSMutableSet<NSString *> *hiddenProviders;
 /// Optional Codex meter toggles (default off).
 @property(strong) NSButton *showSpendToggle;
 @property(strong) NSButton *showTodayToggle;
@@ -118,6 +123,8 @@ static const CGFloat kMinFontSize = 9.0;
     _providerButtons = [NSMutableDictionary dictionary];
     _fieldInputs = [NSMutableDictionary dictionary];
     _codexAccountRows = [NSMutableArray array];
+    _providerCheckboxRows = [NSMutableArray array];
+    _hiddenProviders = [NSMutableSet set];
     _hiddenHomes = [NSMutableSet set];
     _settingsVisible = NO;
   }
@@ -329,6 +336,10 @@ static const CGFloat kMinFontSize = 9.0;
   NSView *previous = nil;
   for (NSDictionary *provider in providers) {
     NSString *providerID = provider[@"id"] ?: @"";
+    if ([provider[@"enabled"] boolValue] == NO ||
+        [self.hiddenProviders containsObject:providerID]) {
+      continue; // switched off in settings
+    }
     NSButton *button = [NSButton buttonWithTitle:@""
                                           target:self
                                           action:@selector(providerClicked:)];
@@ -368,6 +379,16 @@ static const CGFloat kMinFontSize = 9.0;
 // @lobehub/icons Mono variants). Template mode lets contentTintColor recolour
 // it for active/inactive states.
 - (NSImage *)logoImageForProvider:(NSString *)providerID {
+  // Command Code has no usable single-path brand mark; the system terminal
+  // glyph reads better than a circle fallback.
+  if ([providerID isEqualToString:@"commandcode"]) {
+    NSImage *symbol = [NSImage imageWithSystemSymbolName:@"terminal"
+                                  accessibilityDescription:providerID];
+    if (symbol != nil) {
+      symbol.template = YES;
+      return symbol;
+    }
+  }
   NSString *path = [self logoPathForProvider:providerID];
   if (path == nil) {
     return [NSImage imageWithSystemSymbolName:@"circle" accessibilityDescription:providerID];
@@ -810,6 +831,7 @@ static const CGFloat kMinFontSize = 9.0;
   [self clearHolder:self.footerHolder];
   [self.fieldInputs removeAllObjects];
   [self.codexAccountRows removeAllObjects];
+  [self.providerCheckboxRows removeAllObjects];
   self.showSpendToggle = nil;
   self.showTodayToggle = nil;
   self.showResetCreditsToggle = nil;
@@ -823,6 +845,7 @@ static const CGFloat kMinFontSize = 9.0;
   [self pinChrome:[self makeFooterRow] inHolder:self.footerHolder];
 
   NSView *previous = nil;
+  [self renderProvidersSectionInto:&previous];
   if ([active isEqualToString:@"codex"]) {
     [self renderCodexAccountsInto:&previous];
     // Off by default: the workspace spend cap is 0 credits on most plans and
@@ -935,6 +958,45 @@ static const CGFloat kMinFontSize = 9.0;
   }
 }
 
+/// Enable/disable switch for every provider, shown at the top of the settings
+/// pane no matter which provider is selected.
+- (void)renderProvidersSectionInto:(NSView **)previous {
+  NSTextField *title = [self label:@"Providers" size:11 weight:NSFontWeightMedium
+                              color:[NSColor labelColor]];
+  [self addRow:title height:13 previous:previous topGap:4];
+
+  for (NSDictionary *provider in self.state[@"providers"] ?: @[]) {
+    NSString *providerID = provider[@"id"] ?: @"";
+    NSButton *toggle = [NSButton checkboxWithTitle:provider[@"label"] ?: @""
+                                            target:self
+                                            action:@selector(providerToggled:)];
+    toggle.identifier = providerID;
+    BOOL shown = [provider[@"enabled"] boolValue] &&
+                 ![self.hiddenProviders containsObject:providerID];
+    toggle.state = shown ? NSControlStateValueOn : NSControlStateValueOff;
+    toggle.controlSize = NSControlSizeMini;
+    toggle.font = [NSFont systemFontOfSize:MAX(kMinFontSize, 11 + kPanelFontDelta)];
+    toggle.toolTip = @"Show this provider in the sidebar and panel";
+    [self addRow:toggle height:20 previous:previous topGap:4];
+    [self.providerCheckboxRows addObject:@{@"id" : providerID, @"checkbox" : toggle}];
+  }
+}
+
+/// Tick box on a provider: hide/show it in the sidebar immediately.
+- (void)providerToggled:(NSButton *)sender {
+  NSString *providerID = sender.identifier ?: @"";
+  if (providerID.length == 0) {
+    return;
+  }
+  self.settingsDirty = YES;
+  if (sender.state == NSControlStateValueOn) {
+    [self.hiddenProviders removeObject:providerID];
+  } else {
+    [self.hiddenProviders addObject:providerID];
+  }
+  [self renderAll];
+}
+
 /// Editor for the Codex account list: enable toggle, custom name, and the
 /// identity read from each home's auth.json.
 - (void)renderCodexAccountsInto:(NSView **)previous {
@@ -1028,7 +1090,8 @@ static const CGFloat kMinFontSize = 9.0;
       @{@"field": @"auth_cookie", @"label": @"Auth Cookie", @"secure": @YES},
     ];
   }
-  if ([provider isEqualToString:@"codex"]) {
+  if ([provider isEqualToString:@"codex"] || [provider isEqualToString:@"commandcode"]) {
+    // Credentials live in each tool's own home; nothing to edit here.
     return @[];
   }
   return @[ @{@"field": @"api_key", @"label": @"API Key", @"secure": @YES} ];
@@ -1149,6 +1212,19 @@ static const CGFloat kMinFontSize = 9.0;
 
 - (void)saveClicked:(id)sender {
   NSString *active = self.state[@"active"] ?: @"";
+
+  // Provider enable switches go out with every settings save.
+  NSMutableDictionary *providerPayload = [NSMutableDictionary dictionary];
+  for (NSDictionary *row in self.providerCheckboxRows) {
+    NSButton *checkbox = row[@"checkbox"];
+    providerPayload[row[@"id"]] = @(checkbox.state == NSControlStateValueOn);
+  }
+  NSData *providerData = [NSJSONSerialization dataWithJSONObject:providerPayload options:0 error:nil];
+  if (providerData != nil) {
+    NSString *json = [[NSString alloc] initWithData:providerData encoding:NSUTF8StringEncoding];
+    goSaveProviderEnabled(json.UTF8String);
+  }
+
   if ([active isEqualToString:@"codex"]) {
     NSMutableArray *payload = [NSMutableArray array];
     for (NSDictionary *row in self.codexAccountRows) {
