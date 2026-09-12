@@ -50,6 +50,7 @@ static const CGFloat kMinFontSize = 9.0;
 @property(strong) NSMutableArray<NSDictionary *> *codexAccountRows;
 /// Optional Codex meter toggles (default off).
 @property(strong) NSButton *showSpendToggle;
+@property(strong) NSButton *showTodayToggle;
 /// Codex meter reading: segment 0 = used, 1 = remaining (default).
 @property(strong) NSSegmentedControl *usedRemainingControl;
 - (void)renderAll;
@@ -500,6 +501,7 @@ static const CGFloat kMinFontSize = 9.0;
   [self.fieldInputs removeAllObjects];
   [self.codexAccountRows removeAllObjects];
   self.showSpendToggle = nil;
+  self.showTodayToggle = nil;
   self.usedRemainingControl = nil;
   for (NSView *view in [self.content.subviews copy]) {
     [view removeFromSuperview];
@@ -522,6 +524,16 @@ static const CGFloat kMinFontSize = 9.0;
     showSpend.toolTip = @"Show each workspace's spend-control meter";
     [self addRow:showSpend height:20 previous:&previous topGap:10];
     self.showSpendToggle = showSpend;
+
+    // "Today" is computed from the SQLite history, so it is opt-in like spend.
+    NSButton *showToday = [NSButton checkboxWithTitle:@"Show today's usage" target:nil action:nil];
+    showToday.state = [self.state[@"codex_show_today"] boolValue] ? NSControlStateValueOn
+                                                                  : NSControlStateValueOff;
+    showToday.controlSize = NSControlSizeMini;
+    showToday.font = [NSFont systemFontOfSize:MAX(kMinFontSize, 11 + kPanelFontDelta)];
+    showToday.toolTip = @"Add a per-account row with quota burned since midnight";
+    [self addRow:showToday height:20 previous:&previous topGap:6];
+    self.showTodayToggle = showToday;
 
     // Read the window meters as quota used or quota left.
     NSView *modeRow = [[NSView alloc] initWithFrame:NSZeroRect];
@@ -819,6 +831,9 @@ static const CGFloat kMinFontSize = 9.0;
     NSMutableDictionary *settings = [NSMutableDictionary dictionary];
     settings[@"accounts"] = payload;
     settings[@"show_spend"] = @(self.showSpendToggle.state == NSControlStateValueOn);
+    if (self.showTodayToggle != nil) {
+      settings[@"show_today"] = @(self.showTodayToggle.state == NSControlStateValueOn);
+    }
     if (self.usedRemainingControl != nil) {
       settings[@"show_remaining"] = @(self.usedRemainingControl.selectedSegment == 1);
     }

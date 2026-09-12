@@ -64,6 +64,10 @@ pub struct CodexConfig {
     /// remaining quota; the menu bar badge always reports used severity.
     #[serde(rename = "show_remaining", default = "default_true")]
     pub show_remaining: bool,
+    /// Show a per-account "Today" row (quota burned since local midnight,
+    /// computed from the SQLite history). Off by default.
+    #[serde(rename = "show_today", default)]
+    pub show_today: bool,
     /// Legacy API-billing fields (pre-subscription builds). Loaded so old
     /// configs keep parsing, dropped on the next save. `allow(dead_code)`
     /// because nothing reads them any more.
@@ -110,7 +114,12 @@ fn config_path() -> io::Result<PathBuf> {
     Ok(config_dir()?.join("config.json"))
 }
 
-/// ~/.config/ocg/cache — last-good snapshots so a restart paints immediately.
+/// ~/.config/ocg — also holds ocg.db (usage history + last-good snapshots).
+pub fn config_dir_path() -> io::Result<PathBuf> {
+    config_dir()
+}
+
+/// ~/.config/ocg/cache — legacy JSON location, migrated into ocg.db on first run.
 pub fn cache_dir() -> io::Result<PathBuf> {
     let dir = config_dir()?.join("cache");
     fs::create_dir_all(&dir)?;

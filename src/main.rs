@@ -19,6 +19,7 @@ mod icon;
 mod panel_state;
 mod providers;
 mod state;
+mod store;
 
 use std::ffi::CStr;
 use std::os::raw::c_char;
@@ -61,6 +62,11 @@ fn run_once_cli(args: &[String]) {
         return;
     }
 
+    if target == "stats" {
+        print_stats();
+        return;
+    }
+
     let result = match target.as_str() {
         "opencode" => fetch_opencode::fetch(&cfg),
         "deepseek" => fetch_deepseek::fetch(&cfg),
@@ -82,6 +88,27 @@ fn run_once_cli(args: &[String]) {
         })).collect::<Vec<_>>(),
     });
     println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
+}
+
+/// `ocg --once stats`: what the SQLite history holds and what each account has
+/// burned since local midnight.
+fn print_stats() {
+    let since = fetch_codex::start_of_today();
+    let mut accounts: Vec<(String, f64)> = store::today_by_account(since).into_iter().collect();
+    accounts.sort_by(|a, b| a.0.cmp(&b.0));
+    let payload = serde_json::json!({
+        "db": store::location().map(|p| p.to_string_lossy().to_string()),
+        "summary": store::summary(),
+        "since_local_midnight": since,
+        "today": accounts
+            .into_iter()
+            .map(|(home, consumed)| serde_json::json!({
+                "home": home,
+                "consumed_percent_of_5h_window": (consumed * 10.0).round() / 10.0,
+            }))
+            .collect::<Vec<_>>(),
+    });
+    println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()));
 }
 
 // ---------- background refresh ----------
@@ -282,10 +309,11 @@ pub extern "C" fn goSaveCodexAccounts(json: *const c_char) {
     thread::spawn(move || {
         let mut cfg = config::load();
         match parse_codex_settings(&payload) {
-            Some((accounts, show_spend, show_remaining)) => {
-                cfg.codex.accounts = accounts;
-                cfg.codex.show_spend = show_spend;
-                cfg.codex.show_remaining = show_remaining;
+            Some(settings) => {
+                cfg.codex.accounts = settings.accounts;
+                cfg.codex.show_spend = settings.show_spend;
+                cfg.codex.show_remaining = settings.show_remaining;
+                cfg.codex.show_today = settings.show_today;
                 let _ = config::save(&mut cfg);
                 refresh_once();
             }
@@ -312,19 +340,31 @@ pub extern "C" fn goQuitRequested() {
 
 /// Parse the Codex settings JSON sent by the settings view. Accepts the current
 /// object form ({"accounts": …, "show_spend": …}) and the older bare array.
-fn parse_codex_settings(json: &str) -> Option<(Vec<config::CodexAccount>, bool, bool)> {
+struct CodexSettings {
+    accounts: Vec<config::CodexAccount>,
+    show_spend: bool,
+    show_remaining: bool,
+    show_today: bool,
+}
+
+fn parse_codex_settings(json: &str) -> Option<CodexSettings> {
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let flag = |map: &serde_json::Map<String, serde_json::Value>, key: &str, default: bool| {
+        map.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
+    };
     match &value {
-        serde_json::Value::Array(_) => Some((parse_accounts(&value)?, false, true)),
-        serde_json::Value::Object(map) => {
-            let accounts = parse_accounts(map.get("accounts")?)?;
-            let show_spend = map.get("show_spend").and_then(|v| v.as_bool()).unwrap_or(false);
-            let show_remaining = map
-                .get("show_remaining")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-            Some((accounts, show_spend, show_remaining))
-        }
+        serde_json::Value::Array(_) => Some(CodexSettings {
+            accounts: parse_accounts(&value)?,
+            show_spend: false,
+            show_remaining: true,
+            show_today: false,
+        }),
+        serde_json::Value::Object(map) => Some(CodexSettings {
+            accounts: parse_accounts(map.get("accounts")?)?,
+            show_spend: flag(map, "show_spend", false),
+            show_remaining: flag(map, "show_remaining", true),
+            show_today: flag(map, "show_today", false),
+        }),
         _ => None,
     }
 }
@@ -386,46 +426,49 @@ mod tests {
 
     #[test]
     fn parses_account_list_payload() {
-        let (accounts, show_spend, show_remaining) = parse_codex_settings(
+        let settings = parse_codex_settings(
             r#"[{"home":"~/.codex","label":"main","enabled":true},
                 {"home":"~/.codex2","label":"","enabled":false},
                 {"home":"~/.codex","label":"dupe"},
                 {"label":"no home"}]"#,
         )
         .unwrap();
+        let accounts = settings.accounts;
         assert_eq!(accounts.len(), 2);
         assert_eq!(accounts[0].home, "~/.codex");
         assert_eq!(accounts[0].label, "main");
         assert!(accounts[0].enabled);
         assert!(!accounts[1].enabled);
-        assert!(!show_spend);
-        assert!(show_remaining, "remaining is the default reading");
+        assert!(!settings.show_spend);
+        assert!(settings.show_remaining, "remaining is the default reading");
+        assert!(!settings.show_today, "the today row is opt-in");
     }
 
     #[test]
     fn parses_codex_settings_object() {
-        let (accounts, show_spend, show_remaining) = parse_codex_settings(
+        let settings = parse_codex_settings(
             r#"{"accounts":[{"home":"~/.codex","label":"","enabled":true}],
-                "show_spend":true,"show_remaining":false}"#,
+                "show_spend":true,"show_remaining":false,"show_today":true}"#,
         )
         .unwrap();
-        assert_eq!(accounts.len(), 1);
-        assert!(show_spend);
-        assert!(!show_remaining);
+        assert_eq!(settings.accounts.len(), 1);
+        assert!(settings.show_spend);
+        assert!(!settings.show_remaining);
+        assert!(settings.show_today);
     }
 
     #[test]
     fn codex_settings_without_mode_key_defaults_to_remaining() {
-        let (_, _, show_remaining) =
-            parse_codex_settings(r#"{"accounts":[],"show_spend":true}"#).unwrap();
-        assert!(show_remaining);
+        let settings = parse_codex_settings(r#"{"accounts":[],"show_spend":true}"#).unwrap();
+        assert!(settings.show_remaining);
+        assert!(!settings.show_today);
     }
 
     #[test]
     fn rejects_malformed_account_list() {
         assert!(parse_codex_settings("not json").is_none());
         assert!(parse_codex_settings("{}").is_none());
-        assert!(parse_codex_settings(r#"{"accounts":[]}"#).unwrap().0.is_empty());
-        assert!(parse_codex_settings("[]").unwrap().0.is_empty());
+        assert!(parse_codex_settings(r#"{"accounts":[]}"#).unwrap().accounts.is_empty());
+        assert!(parse_codex_settings("[]").unwrap().accounts.is_empty());
     }
 }

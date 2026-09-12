@@ -51,7 +51,7 @@ Shows subscription usage for **every ChatGPT login on the machine**, not an API-
 - **Credentials are read-only.** ocg never writes `auth.json`. When an access token is close to expiry it asks the `codex` CLI (`codex app-server` → `account/rateLimits/read`) instead of refreshing on its own, so the CLI stays the single owner of token rotation.
 - **Transports**: HTTPS via reqwest, falling back to the system `curl` (native TLS) if the request is refused, then to the CLI. Failures are per account and isolated; the last good snapshot is cached in `~/.config/ocg/cache/codex.json` and shown as `cached`.
 - **Two homes, one account**: if several homes hold the same ChatGPT account the row leads with the home path and is marked `⧉` (they share one quota).
-- **Settings**: rename an account inline, enable/disable it, switch the meter reading between **Used** and **Remaining** (default: remaining, shown as `5h left 43%`), and toggle the optional **Show spend limit** row (off by default — most plans cap it at 0 credits).
+- **Settings**: rename an account inline, enable/disable it, switch the meter reading between **Used** and **Remaining** (default: remaining, shown as `5h left 43%`), and toggle the optional **Show spend limit** and **Show today's usage** rows (both off by default).
 - The menu bar badge keeps reporting the worst *used* percentage across all providers, so its colour and the gauge fill always mean "how close to the limit".
 
 ## Setup
@@ -77,13 +77,29 @@ Config stored at `~/.config/ocg/config.json`. Old single-provider config files a
 
 An empty `accounts` list means "auto-discover every `~/.codex*`". `refresh_minutes` (top level or per provider) overrides the default 15-minute cycle; cycles back off automatically while every provider fails.
 
+## Storage (SQLite)
+
+Usage history lives in `~/.config/ocg/ocg.db` (SQLite, WAL). Two tables:
+
+- `samples` — one row per account/window per refresh, with `reset_at` and `window_secs` so consumption can be summed **per limit window** rather than per clock hour. Rows older than 90 days are pruned on write.
+- `snapshots` — the newest payload per account, which is what paints the panel instantly after a restart and what a failed fetch falls back to (`cached`).
+
+The Codex **Today** row is derived from `samples`: it walks the window in order, adds each rise, credits a reading in full when its window opened after midnight, and skips a reading whose window predates the range rather than over-reporting it.
+
+An existing `~/.config/ocg/cache/codex.json` (pre-SQLite builds) is imported on first run and renamed to `codex.json.migrated`. Provider credentials and settings stay in `config.json` — they are meant to be hand-editable.
+
+```bash
+./target/release/ocg --once stats   # db path, row counts, per-account consumption since local midnight
+```
+
 ## Debugging
 
 `--once` fetches without the UI and prints JSON — the fastest way to check the Codex accounts:
 
 ```bash
-./target/release/ocg --once codex   # per-account snapshots, transport, errors
-./target/release/ocg --once all     # full panel state
+./target/release/ocg --once codex   # per-account snapshot, transport, errors (read-only, records nothing)
+./target/release/ocg --once stats   # SQLite contents + quota burned since local midnight
+./target/release/ocg --once all     # full refresh cycle (writes history) + panel state
 ```
 
 Environment switches (all optional):
@@ -108,6 +124,8 @@ make build  # plain binary at target/release/ocg
 Requires Rust 1.80+ and Xcode Command Line Tools (for compiling the native AppKit shell and linking Cocoa). The Objective-C UI layer (`app_darwin.m`) is compiled via [`cc`](https://crates.io/crates/cc) in `build.rs`.
 
 ---
+
+**Version 0.0.5** — usage history in SQLite (`ocg.db`): window samples + last-good snapshots, an opt-in per-account "Today" row, and `--once stats`.
 
 **Version 0.0.4** — panel typography one notch smaller (sidebar marks 15pt in a 36pt rail with ~10pt of air, all right-pane text −2pt), and a Used/Remaining switch for the Codex meters (defaults to remaining).
 

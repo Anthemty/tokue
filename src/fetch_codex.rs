@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -25,16 +24,25 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::codex_accounts::{self, AccountIdentity};
-use crate::config::{self, Config};
+use crate::config::Config;
 use crate::providers::{format_duration, ProviderFetchResult, UsageMeter};
+use crate::store;
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const UA: &str = "codex-cli";
 const ORIGINATOR: &str = "codex_cli_rs";
 /// Refresh via the CLI when the token has less than this left.
 const TOKEN_MARGIN_SECS: i64 = 120;
-/// Cached snapshots older than this are not shown when a fetch fails.
-const CACHE_MAX_AGE_SECS: i64 = 24 * 3600;
+/// Local midnight, the start of the "Today" window.
+pub fn start_of_today() -> i64 {
+    use chrono::{Local, TimeZone};
+    let now = Local::now();
+    now.date_naive()
+        .and_hms_opt(0, 0, 0)
+        .and_then(|naive| Local.from_local_datetime(&naive).single())
+        .map(|dt| dt.timestamp())
+        .unwrap_or_else(|| now.timestamp() - 86400)
+}
 
 // ---------------------------------------------------------------------------
 // Snapshot model (normalised across the HTTP and RPC shapes)
@@ -511,43 +519,7 @@ fn fetch_account(
 // Cache
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize, Deserialize, Default)]
-struct CacheFile {
-    #[serde(default)]
-    version: u32,
-    /// home path → last good snapshot
-    #[serde(default)]
-    accounts: HashMap<String, Snapshot>,
-}
-
-fn cache_path() -> Option<PathBuf> {
-    config::cache_dir().ok().map(|d| d.join("codex.json"))
-}
-
-fn load_cache() -> HashMap<String, Snapshot> {
-    let path = match cache_path() {
-        Some(p) => p,
-        None => return HashMap::new(),
-    };
-    let data = match std::fs::read(&path) {
-        Ok(d) => d,
-        Err(_) => return HashMap::new(),
-    };
-    serde_json::from_slice::<CacheFile>(&data)
-        .map(|c| c.accounts)
-        .unwrap_or_default()
-}
-
-fn save_cache(accounts: &HashMap<String, Snapshot>) {
-    let path = match cache_path() {
-        Some(p) => p,
-        None => return,
-    };
-    let file = CacheFile { version: 1, accounts: accounts.clone() };
-    if let Ok(data) = serde_json::to_vec_pretty(&file) {
-        let _ = std::fs::write(path, data);
-    }
-}
+// The last-good snapshot cache lives in SQLite (store::last_codex_snapshots).
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -623,13 +595,24 @@ fn format_reset_clock(unix: i64) -> Option<String> {
     }
 }
 
+/// How the panel should read the samples, from the Codex settings.
+#[derive(Clone, Copy, Default)]
+pub struct MeterOptions {
+    pub show_spend: bool,
+    pub show_remaining: bool,
+    pub show_today: bool,
+    /// Quota burned since local midnight (percent-of-window units).
+    pub today_consumed: Option<f64>,
+}
+
 fn meters_for(
     acct: &AccountIdentity,
     snap: &Snapshot,
     stale: bool,
-    show_spend: bool,
-    show_remaining: bool,
+    opts: MeterOptions,
 ) -> Vec<UsageMeter> {
+    let show_remaining = opts.show_remaining;
+    let show_spend = opts.show_spend;
     let mut title = if acct.label.is_empty() && !snap.email.is_empty() {
         snap.email.clone()
     } else {
@@ -669,6 +652,15 @@ fn meters_for(
             window_label(secondary.window_secs, "Secondary", show_remaining),
             display_percent(secondary.used_percent, show_remaining),
             format!("{}{}", reset_detail(secondary), suffix),
+        ));
+    }
+    if let Some(consumed) = opts.today_consumed.filter(|_| opts.show_today && !stale) {
+        let rounded = consumed.round() as i64;
+        meters.push(UsageMeter::grouped(
+            title.clone(),
+            "Today".to_string(),
+            rounded.clamp(0, 100) as i32,
+            format!("{}% used today", rounded.max(0)),
         ));
     }
     if let Some(spend) = &snap.spend {
@@ -799,7 +791,7 @@ struct AccountOutcome {
 fn collect(cfg: &Config) -> Vec<AccountOutcome> {
     let accounts = codex_accounts::load_enabled(cfg);
     let client = http_client();
-    let cache = load_cache();
+    let cache = store::last_codex_snapshots();
 
     // Fetch accounts in parallel, staggered so we never burst the endpoint.
     let handles: Vec<_> = accounts
@@ -824,9 +816,7 @@ fn collect(cfg: &Config) -> Vec<AccountOutcome> {
                 match fetch_account(&client, &acct) {
                     Ok(snap) => AccountOutcome { acct, snap: Some(snap), err: None, stale: false },
                     Err(e) => {
-                        let fresh_cache = cached.filter(|c| {
-                            c.fetched_at > 0 && now_unix() - c.fetched_at < CACHE_MAX_AGE_SECS
-                        });
+                        let fresh_cache = cached.filter(store::snapshot_is_fresh);
                         match fresh_cache {
                             Some(c) => AccountOutcome { acct, snap: Some(c), err: Some(e), stale: true },
                             None => AccountOutcome { acct, snap: None, err: Some(e), stale: false },
@@ -857,18 +847,24 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
     let mut summary_lines: Vec<String> = Vec::new();
     let mut criticality = 0;
     let mut failures: Vec<String> = Vec::new();
-    let mut new_cache = load_cache();
+
+    // "Today" comes from the SQLite history, not from the current snapshot.
+    let today = if cfg.codex.show_today {
+        store::today_by_account(start_of_today())
+    } else {
+        HashMap::new()
+    };
 
     for outcome in &outcomes {
+        let opts = MeterOptions {
+            show_spend: cfg.codex.show_spend,
+            show_remaining: cfg.codex.show_remaining,
+            show_today: cfg.codex.show_today,
+            today_consumed: today.get(&outcome.acct.home).copied(),
+        };
         match (&outcome.snap, &outcome.err) {
             (Some(snap), _) => {
-                meters.extend(meters_for(
-                    &outcome.acct,
-                    snap,
-                    outcome.stale,
-                    cfg.codex.show_spend,
-                    cfg.codex.show_remaining,
-                ));
+                meters.extend(meters_for(&outcome.acct, snap, outcome.stale, opts));
                 criticality = criticality.max(snap.criticality());
                 summary_lines.push(summary_line(
                     &outcome.acct,
@@ -879,7 +875,7 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
                     cfg.codex.show_remaining,
                 ));
                 if !outcome.stale {
-                    new_cache.insert(outcome.acct.home.clone(), snap.clone());
+                    store::record_codex(&outcome.acct.home, &outcome.acct.label, snap);
                 }
             }
             (None, Some(err)) => {
@@ -897,8 +893,6 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
             (None, None) => {}
         }
     }
-
-    save_cache(&new_cache);
 
     // All accounts failed → surface it as a provider-level error.
     if failures.len() == outcomes.len() {

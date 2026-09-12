@@ -21,6 +21,7 @@ struct PanelState {
     codex_accounts: Vec<PanelCodexAccount>,
     codex_show_spend: bool,
     codex_show_remaining: bool,
+    codex_show_today: bool,
 }
 
 #[derive(Serialize)]
@@ -74,6 +75,7 @@ pub fn build_json(cfg: &Config) -> String {
         codex_accounts: Vec::new(),
         codex_show_spend: cfg.codex.show_spend,
         codex_show_remaining: cfg.codex.show_remaining,
+        codex_show_today: cfg.codex.show_today,
     };
 
     for &id in PROVIDERS {
