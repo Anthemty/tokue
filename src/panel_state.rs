@@ -148,22 +148,17 @@ pub fn build_json(cfg: &Config) -> String {
     mx.insert("api_key".to_string(), cfg.minimax.api_key.clone());
     state.credentials.insert("minimax".to_string(), mx);
 
-    // Codex settings list: every configured (or discovered) home with the
-    // identity we can read offline, so the panel can label rows before any
-    // network call.
+    // Codex settings list: every configured (or discovered) home, in config
+    // order — disabled rows stay where they are instead of sinking to the end
+    // (which used to reshuffle the saved list on the next save).
     let specs = codex_accounts::effective_accounts(cfg);
-    let mut identities = codex_accounts::load_enabled(cfg);
-    // load_enabled drops disabled rows; reload them so they can be re-enabled.
-    let enabled_homes: Vec<String> = identities.iter().map(|a| a.home.clone()).collect();
-    for spec in specs.iter().filter(|s| !s.enabled) {
-        let expanded = codex_accounts::expand_home(&spec.home);
-        if !enabled_homes.contains(&expanded) {
-            identities.push(codex_accounts::load(&spec.home, &spec.label));
-        }
-    }
+    let identities: Vec<codex_accounts::AccountIdentity> = specs
+        .iter()
+        .map(|spec| codex_accounts::load(&spec.home, &spec.label))
+        .collect();
 
     let mut seen: Vec<(String, String)> = Vec::new();
-    for acct in &identities {
+    for (acct, spec) in identities.iter().zip(specs.iter()) {
         let mut duplicate_of = acct.duplicate_of.clone();
         if duplicate_of.is_none() && !acct.account_id.is_empty() {
             if let Some((_, first)) = seen.iter().find(|(id, _)| *id == acct.account_id) {
@@ -172,11 +167,7 @@ pub fn build_json(cfg: &Config) -> String {
                 seen.push((acct.account_id.clone(), acct.home_display.clone()));
             }
         }
-        let enabled = specs
-            .iter()
-            .find(|s| codex_accounts::expand_home(&s.home) == acct.home)
-            .map(|s| s.enabled)
-            .unwrap_or(true);
+        let enabled = spec.enabled;
         state.codex_accounts.push(PanelCodexAccount {
             home: acct.home.clone(),
             home_display: acct.home_display.clone(),

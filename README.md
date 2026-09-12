@@ -46,11 +46,11 @@ Click a sidebar icon to switch providers. Click **⚙** in the header to edit th
 ### Codex (ChatGPT accounts)
 Shows subscription usage for **every ChatGPT login on the machine**, not an API-key bill.
 
-- **Accounts**: each `~/.codex*` directory that holds a `codex login` session is discovered automatically (`.codex`, `.codex2`, `.codex3` …). Add a home on disk and it appears after the next refresh, or press **Rescan ~/.codex\*** in the settings pane.
+- **Accounts**: each `~/.codex*` directory that holds a `codex login` session is discovered automatically (`.codex`, `.codex2`, `.codex3` …). Add a home on disk and it appears after the next refresh, or press **Rescan ~/.codex\*** in the settings pane. Every account renders as its own card — email · plan on the left, the `~/.codexN` home on the right — with one compact line plus a thin bar per window.
 - **Data**: the same endpoint the Codex CLI itself uses, `GET https://chatgpt.com/backend-api/wham/usage`, with the account's OAuth access token. The pane groups rows per account (email · plan) and shows the 5-hour and weekly windows with reset times, plus optional credits / spend / reset-credit rows.
 - **Credentials are read-only.** ocg never writes `auth.json`. When an access token is close to expiry it asks the `codex` CLI (`codex app-server` → `account/rateLimits/read`) instead of refreshing on its own, so the CLI stays the single owner of token rotation.
 - **Transports**: HTTPS via reqwest, falling back to the system `curl` (native TLS) if the request is refused, then to the CLI. Failures are per account and isolated; the last good snapshot is cached in `~/.config/ocg/cache/codex.json` and shown as `cached`.
-- **Two homes, one account**: if several homes hold the same ChatGPT account the row leads with the home path and is marked `⧉` (they share one quota).
+- **Two homes, one account**: if several homes hold the same ChatGPT account, each card still names its own home and the title carries `⧉` (they share one quota).
 - **Settings**: rename an account inline, enable/disable it, switch the meter reading between **Used** and **Remaining** (default: remaining, shown as `5h left 43%`), and toggle the optional **Show spend limit** and **Show today's usage** rows (both off by default).
 - The menu bar badge keeps reporting the worst *used* percentage across all providers, so its colour and the gauge fill always mean "how close to the limit".
 

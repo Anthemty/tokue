@@ -625,10 +625,10 @@ fn meters_for(
         title.push_str(" · ");
         title.push_str(&codex_accounts::plan_display(&plan));
     }
-    // Two homes can hold the same account; there the home path is the only
-    // thing telling the rows apart, so it leads.
+    // Two homes can hold the same account; the card header shows each home on
+    // its own line, so the title only marks that the quota is shared.
     if acct.duplicate_of.is_some() {
-        title = format!("{} · {} ⧉", acct.home_display, title);
+        title = format!("{} ⧉", title);
     }
     if snap.limit_reached {
         title.push_str(" · ");

@@ -437,20 +437,46 @@ static const CGFloat kMinFontSize = 9.0;
     [self addRow:updated height:16 previous:&previous topGap:4];
 
     NSArray *meters = result[@"meters"] ?: @[];
-    NSString *currentGroup = nil;
+    NSView *card = nil;     // current account card
+    NSView *cardLast = nil; // last row inside it
     for (NSDictionary *meter in meters) {
       NSString *key = meter[@"key"];
       if ([key isKindOfClass:[NSString class]] && [self.hiddenHomes containsObject:key]) {
         continue; // unticked in settings: hidden locally, no refetch needed
       }
       NSString *group = meter[@"group"];
-      if ([group isKindOfClass:[NSString class]] && group.length > 0 &&
-          ![group isEqualToString:currentGroup]) {
-        NSView *groupRow = [self groupRowWithTitle:group first:(currentGroup == nil)];
-        [self addRow:groupRow height:(currentGroup == nil ? 14 : 21) previous:&previous topGap:2];
-        currentGroup = group;
+      BOOL grouped = [group isKindOfClass:[NSString class]] && group.length > 0;
+      if (grouped && (card == nil || ![group isEqualToString:card.identifier])) {
+        if (card != nil && cardLast != nil) {
+          [NSLayoutConstraint activateConstraints:@[
+            [cardLast.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-6],
+          ]];
+        }
+        card = [self cardViewWithTitle:group key:key];
+        card.identifier = group;
+        cardLast = [card viewWithTag:1]; // the title label
+        [self addCard:card previous:&previous];
       }
-      [self addRow:[self meterRow:meter] height:42 previous:&previous topGap:5];
+      if (grouped) {
+        NSView *row = [self compactMeterRow:meter];
+        row.translatesAutoresizingMaskIntoConstraints = NO;
+        [card addSubview:row];
+        [NSLayoutConstraint activateConstraints:@[
+          [row.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:9],
+          [row.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-9],
+          [row.topAnchor constraintEqualToAnchor:cardLast.bottomAnchor constant:4],
+          [row.heightAnchor constraintEqualToConstant:20],
+        ]];
+        cardLast = row;
+      } else {
+        [self addRow:[self meterRow:meter] height:42 previous:&previous topGap:5];
+        card = nil;
+      }
+    }
+    if (card != nil && cardLast != nil) {
+      [NSLayoutConstraint activateConstraints:@[
+        [cardLast.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-6],
+      ]];
     }
   }
 
@@ -459,6 +485,112 @@ static const CGFloat kMinFontSize = 9.0;
       [previous.bottomAnchor constraintEqualToAnchor:self.content.bottomAnchor constant:-10],
     ]];
   }
+}
+
+/// Add a card to the scrolling content: width pinned, height from its contents.
+- (void)addCard:(NSView *)card previous:(NSView **)previous {
+  card.translatesAutoresizingMaskIntoConstraints = NO;
+  [self.content addSubview:card];
+  NSMutableArray *constraints = [NSMutableArray array];
+  [constraints addObject:[card.leadingAnchor constraintEqualToAnchor:self.content.leadingAnchor constant:12]];
+  [constraints addObject:[card.trailingAnchor constraintEqualToAnchor:self.content.trailingAnchor constant:-12]];
+  if (*previous == nil) {
+    [constraints addObject:[card.topAnchor constraintEqualToAnchor:self.content.topAnchor constant:6]];
+  } else {
+    [constraints addObject:[card.topAnchor constraintEqualToAnchor:(*previous).bottomAnchor constant:7]];
+  }
+  [NSLayoutConstraint activateConstraints:constraints];
+  *previous = card;
+}
+
+/// "/Users/x/.codex2" -> "~/.codex2".
+- (NSString *)abbreviateHome:(NSString *)path {
+  if (![path isKindOfClass:[NSString class]] || path.length == 0) {
+    return @"";
+  }
+  NSString *home = NSHomeDirectory();
+  if ([path hasPrefix:home]) {
+    return [@"~" stringByAppendingString:[path substringFromIndex:home.length]];
+  }
+  return path;
+}
+
+/// One card per account: rounded panel, email/plan on the left, the CODEX_HOME
+/// on the right — so several logins never blur into one list.
+- (NSView *)cardViewWithTitle:(NSString *)title key:(NSString *)key {
+  NSView *card = [[NSView alloc] initWithFrame:NSZeroRect];
+  card.wantsLayer = YES;
+  card.layer.cornerRadius = 6;
+  card.layer.backgroundColor = [[NSColor labelColor] colorWithAlphaComponent:0.05].CGColor;
+
+  NSTextField *titleLabel =
+      [self label:title size:11 weight:NSFontWeightSemibold color:[NSColor labelColor]];
+  titleLabel.tag = 1;
+  titleLabel.toolTip = title;
+  [titleLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+  [card addSubview:titleLabel];
+
+  NSString *home = [self abbreviateHome:key];
+  NSTextField *homeLabel =
+      [self label:home size:10 weight:NSFontWeightRegular color:[NSColor tertiaryLabelColor]];
+  homeLabel.toolTip = key;
+  [card addSubview:homeLabel];
+
+  [NSLayoutConstraint activateConstraints:@[
+    [titleLabel.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:9],
+    [titleLabel.topAnchor constraintEqualToAnchor:card.topAnchor constant:6],
+    [homeLabel.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-9],
+    [homeLabel.firstBaselineAnchor constraintEqualToAnchor:titleLabel.firstBaselineAnchor],
+    [homeLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:titleLabel.trailingAnchor
+                                                         constant:6],
+  ]];
+  return card;
+}
+
+/// Compact meter for use inside a card: one text line over a thin bar.
+- (NSView *)compactMeterRow:(NSDictionary *)meter {
+  NSView *row = [[NSView alloc] initWithFrame:NSZeroRect];
+
+  NSString *labelText = meter[@"label"] ?: @"Usage";
+  NSNumber *percentNumber = meter[@"percent"] ?: @0;
+  NSString *detailText = meter[@"detail"] ?: @"";
+  double percent = MAX(0, MIN(100, percentNumber.doubleValue));
+
+  NSTextField *label = [self label:[NSString stringWithFormat:@"%@  %.0f%%", labelText, percent]
+                              size:11 weight:NSFontWeightSemibold color:[NSColor labelColor]];
+  [label setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                  forOrientation:NSLayoutConstraintOrientationHorizontal];
+  NSTextField *detail =
+      [self label:detailText size:10 weight:NSFontWeightRegular color:[NSColor secondaryLabelColor]];
+  [detail setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
+  NSProgressIndicator *progress = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
+  progress.indeterminate = NO;
+  progress.minValue = 0;
+  progress.maxValue = 100;
+  progress.doubleValue = percent;
+  progress.controlSize = NSControlSizeSmall;
+
+  label.translatesAutoresizingMaskIntoConstraints = NO;
+  detail.translatesAutoresizingMaskIntoConstraints = NO;
+  progress.translatesAutoresizingMaskIntoConstraints = NO;
+  [row addSubview:label];
+  [row addSubview:detail];
+  [row addSubview:progress];
+
+  [NSLayoutConstraint activateConstraints:@[
+    [label.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+    [label.topAnchor constraintEqualToAnchor:row.topAnchor],
+    [detail.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+    [detail.firstBaselineAnchor constraintEqualToAnchor:label.firstBaselineAnchor],
+    [detail.leadingAnchor constraintGreaterThanOrEqualToAnchor:label.trailingAnchor constant:6],
+    [progress.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+    [progress.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+    [progress.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
+    [progress.heightAnchor constraintEqualToConstant:5],
+  ]];
+  return row;
 }
 
 /// Account heading: "email · Plan · ~/.codex" above that account's meters.
