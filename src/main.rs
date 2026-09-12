@@ -282,9 +282,10 @@ pub extern "C" fn goSaveCodexAccounts(json: *const c_char) {
     thread::spawn(move || {
         let mut cfg = config::load();
         match parse_codex_settings(&payload) {
-            Some((accounts, show_spend)) => {
+            Some((accounts, show_spend, show_remaining)) => {
                 cfg.codex.accounts = accounts;
                 cfg.codex.show_spend = show_spend;
+                cfg.codex.show_remaining = show_remaining;
                 let _ = config::save(&mut cfg);
                 refresh_once();
             }
@@ -311,14 +312,18 @@ pub extern "C" fn goQuitRequested() {
 
 /// Parse the Codex settings JSON sent by the settings view. Accepts the current
 /// object form ({"accounts": …, "show_spend": …}) and the older bare array.
-fn parse_codex_settings(json: &str) -> Option<(Vec<config::CodexAccount>, bool)> {
+fn parse_codex_settings(json: &str) -> Option<(Vec<config::CodexAccount>, bool, bool)> {
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
     match &value {
-        serde_json::Value::Array(_) => Some((parse_accounts(&value)?, false)),
+        serde_json::Value::Array(_) => Some((parse_accounts(&value)?, false, true)),
         serde_json::Value::Object(map) => {
             let accounts = parse_accounts(map.get("accounts")?)?;
             let show_spend = map.get("show_spend").and_then(|v| v.as_bool()).unwrap_or(false);
-            Some((accounts, show_spend))
+            let show_remaining = map
+                .get("show_remaining")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            Some((accounts, show_spend, show_remaining))
         }
         _ => None,
     }
@@ -381,7 +386,7 @@ mod tests {
 
     #[test]
     fn parses_account_list_payload() {
-        let (accounts, show_spend) = parse_codex_settings(
+        let (accounts, show_spend, show_remaining) = parse_codex_settings(
             r#"[{"home":"~/.codex","label":"main","enabled":true},
                 {"home":"~/.codex2","label":"","enabled":false},
                 {"home":"~/.codex","label":"dupe"},
@@ -394,16 +399,26 @@ mod tests {
         assert!(accounts[0].enabled);
         assert!(!accounts[1].enabled);
         assert!(!show_spend);
+        assert!(show_remaining, "remaining is the default reading");
     }
 
     #[test]
     fn parses_codex_settings_object() {
-        let (accounts, show_spend) = parse_codex_settings(
-            r#"{"accounts":[{"home":"~/.codex","label":"","enabled":true}],"show_spend":true}"#,
+        let (accounts, show_spend, show_remaining) = parse_codex_settings(
+            r#"{"accounts":[{"home":"~/.codex","label":"","enabled":true}],
+                "show_spend":true,"show_remaining":false}"#,
         )
         .unwrap();
         assert_eq!(accounts.len(), 1);
         assert!(show_spend);
+        assert!(!show_remaining);
+    }
+
+    #[test]
+    fn codex_settings_without_mode_key_defaults_to_remaining() {
+        let (_, _, show_remaining) =
+            parse_codex_settings(r#"{"accounts":[],"show_spend":true}"#).unwrap();
+        assert!(show_remaining);
     }
 
     #[test]

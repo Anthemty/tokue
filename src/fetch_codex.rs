@@ -557,13 +557,22 @@ fn now_unix() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
+/// Panel percentage for a window: quota used, or quota left.
+fn display_percent(used_percent: i32, show_remaining: bool) -> i32 {
+    if show_remaining {
+        (100 - used_percent).clamp(0, 100)
+    } else {
+        used_percent.clamp(0, 100)
+    }
+}
+
 /// Short window name derived from its length: "5h", "Weekly", "3d".
-fn window_label(window_secs: Option<i64>, fallback: &str) -> String {
+fn window_label(window_secs: Option<i64>, fallback: &str, show_remaining: bool) -> String {
     let secs = match window_secs {
         Some(s) if s > 0 => s,
         _ => return fallback.to_string(),
     };
-    if secs >= 6 * 86400 {
+    let name = if secs >= 6 * 86400 {
         "Weekly".to_string()
     } else if secs % 86400 == 0 {
         format!("{}d", secs / 86400)
@@ -571,6 +580,12 @@ fn window_label(window_secs: Option<i64>, fallback: &str) -> String {
         format!("{}h", secs / 3600)
     } else {
         format!("{}m", secs / 60)
+    };
+    // "43% left" is unambiguous; a bare percentage could mean either.
+    if show_remaining {
+        format!("{} left", name)
+    } else {
+        name
     }
 }
 
@@ -608,7 +623,13 @@ fn format_reset_clock(unix: i64) -> Option<String> {
     }
 }
 
-fn meters_for(acct: &AccountIdentity, snap: &Snapshot, stale: bool, show_spend: bool) -> Vec<UsageMeter> {
+fn meters_for(
+    acct: &AccountIdentity,
+    snap: &Snapshot,
+    stale: bool,
+    show_spend: bool,
+    show_remaining: bool,
+) -> Vec<UsageMeter> {
     let mut title = if acct.label.is_empty() && !snap.email.is_empty() {
         snap.email.clone()
     } else {
@@ -637,16 +658,16 @@ fn meters_for(acct: &AccountIdentity, snap: &Snapshot, stale: bool, show_spend: 
     if let Some(primary) = &snap.primary {
         meters.push(UsageMeter::grouped(
             title.clone(),
-            window_label(primary.window_secs, "Primary"),
-            primary.used_percent,
+            window_label(primary.window_secs, "Primary", show_remaining),
+            display_percent(primary.used_percent, show_remaining),
             format!("{}{}", reset_detail(primary), suffix),
         ));
     }
     if let Some(secondary) = &snap.secondary {
         meters.push(UsageMeter::grouped(
             title.clone(),
-            window_label(secondary.window_secs, "Secondary"),
-            secondary.used_percent,
+            window_label(secondary.window_secs, "Secondary", show_remaining),
+            display_percent(secondary.used_percent, show_remaining),
             format!("{}{}", reset_detail(secondary), suffix),
         ));
     }
@@ -710,6 +731,7 @@ fn summary_line(
     stale: bool,
     err: Option<&str>,
     show_spend: bool,
+    show_remaining: bool,
 ) -> String {
     let name = match snap {
         Some(s) if acct.label.is_empty() && !s.email.is_empty() => s.email.clone(),
@@ -724,13 +746,17 @@ fn summary_line(
                 line.push_str(&codex_accounts::plan_display(&plan));
             }
             if let Some(p) = &s.primary {
-                line.push_str(&format!("  {} {}%", window_label(p.window_secs, "5h"), p.used_percent));
+                line.push_str(&format!(
+                    "  {} {}%",
+                    window_label(p.window_secs, "5h", show_remaining),
+                    display_percent(p.used_percent, show_remaining)
+                ));
             }
             if let Some(sec) = &s.secondary {
                 line.push_str(&format!(
                     "  {} {}%",
-                    window_label(sec.window_secs, "7d"),
-                    sec.used_percent
+                    window_label(sec.window_secs, "7d", show_remaining),
+                    display_percent(sec.used_percent, show_remaining)
                 ));
             }
             if s.limit_reached {
@@ -836,7 +862,13 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
     for outcome in &outcomes {
         match (&outcome.snap, &outcome.err) {
             (Some(snap), _) => {
-                meters.extend(meters_for(&outcome.acct, snap, outcome.stale, cfg.codex.show_spend));
+                meters.extend(meters_for(
+                    &outcome.acct,
+                    snap,
+                    outcome.stale,
+                    cfg.codex.show_spend,
+                    cfg.codex.show_remaining,
+                ));
                 criticality = criticality.max(snap.criticality());
                 summary_lines.push(summary_line(
                     &outcome.acct,
@@ -844,6 +876,7 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
                     outcome.stale,
                     outcome.err.as_deref(),
                     cfg.codex.show_spend,
+                    cfg.codex.show_remaining,
                 ));
                 if !outcome.stale {
                     new_cache.insert(outcome.acct.home.clone(), snap.clone());
@@ -857,6 +890,7 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
                     false,
                     Some(err),
                     cfg.codex.show_spend,
+                    cfg.codex.show_remaining,
                 ));
                 failures.push(format!("{}: {}", outcome.acct.home_display, err));
             }
@@ -975,10 +1009,22 @@ mod tests {
 
     #[test]
     fn window_labels_cover_common_spans() {
-        assert_eq!(window_label(Some(18000), "Primary"), "5h");
-        assert_eq!(window_label(Some(604800), "Secondary"), "Weekly");
-        assert_eq!(window_label(Some(3 * 86400), "x"), "3d");
-        assert_eq!(window_label(None, "Primary"), "Primary");
+        assert_eq!(window_label(Some(18000), "Primary", false), "5h");
+        assert_eq!(window_label(Some(604800), "Secondary", false), "Weekly");
+        assert_eq!(window_label(Some(3 * 86400), "x", false), "3d");
+        assert_eq!(window_label(None, "Primary", false), "Primary");
+        assert_eq!(window_label(Some(18000), "Primary", true), "5h left");
+    }
+
+    #[test]
+    fn percent_switches_between_used_and_remaining() {
+        assert_eq!(display_percent(57, false), 57);
+        assert_eq!(display_percent(57, true), 43);
+        assert_eq!(display_percent(100, true), 0);
+        assert_eq!(display_percent(0, true), 100);
+        // Out-of-range backends must not produce negative bars.
+        assert_eq!(display_percent(130, true), 0);
+        assert_eq!(display_percent(-5, true), 100);
     }
 
     #[test]

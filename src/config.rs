@@ -60,6 +60,10 @@ pub struct CodexConfig {
     /// cap on most plans and only adds noise.
     #[serde(rename = "show_spend", default)]
     pub show_spend: bool,
+    /// Read the panel meters as quota left instead of quota used. Defaults to
+    /// remaining quota; the menu bar badge always reports used severity.
+    #[serde(rename = "show_remaining", default = "default_true")]
+    pub show_remaining: bool,
     /// Legacy API-billing fields (pre-subscription builds). Loaded so old
     /// configs keep parsing, dropped on the next save. `allow(dead_code)`
     /// because nothing reads them any more.

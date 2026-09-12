@@ -20,6 +20,7 @@ struct PanelState {
     credentials: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
     codex_accounts: Vec<PanelCodexAccount>,
     codex_show_spend: bool,
+    codex_show_remaining: bool,
 }
 
 #[derive(Serialize)]
@@ -72,6 +73,7 @@ pub fn build_json(cfg: &Config) -> String {
         credentials: std::collections::BTreeMap::new(),
         codex_accounts: Vec::new(),
         codex_show_spend: cfg.codex.show_spend,
+        codex_show_remaining: cfg.codex.show_remaining,
     };
 
     for &id in PROVIDERS {

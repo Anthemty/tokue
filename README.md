@@ -51,7 +51,8 @@ Shows subscription usage for **every ChatGPT login on the machine**, not an API-
 - **Credentials are read-only.** ocg never writes `auth.json`. When an access token is close to expiry it asks the `codex` CLI (`codex app-server` → `account/rateLimits/read`) instead of refreshing on its own, so the CLI stays the single owner of token rotation.
 - **Transports**: HTTPS via reqwest, falling back to the system `curl` (native TLS) if the request is refused, then to the CLI. Failures are per account and isolated; the last good snapshot is cached in `~/.config/ocg/cache/codex.json` and shown as `cached`.
 - **Two homes, one account**: if several homes hold the same ChatGPT account the row leads with the home path and is marked `⧉` (they share one quota).
-- **Settings**: rename an account inline, enable/disable it, and toggle the optional **Show spend limit** row (off by default — most plans cap it at 0 credits).
+- **Settings**: rename an account inline, enable/disable it, switch the meter reading between **Used** and **Remaining** (default: remaining, shown as `5h left 43%`), and toggle the optional **Show spend limit** row (off by default — most plans cap it at 0 credits).
+- The menu bar badge keeps reporting the worst *used* percentage across all providers, so its colour and the gauge fill always mean "how close to the limit".
 
 ## Setup
 
@@ -67,7 +68,8 @@ Config stored at `~/.config/ocg/config.json`. Old single-provider config files a
       { "home": "~/.codex2", "label": "team", "enabled": true }
     ],
     "refresh_minutes": 15,
-    "show_spend": false
+    "show_spend": false,
+    "show_remaining": true
   },
   "refresh_minutes": 15
 }
@@ -106,6 +108,8 @@ make build  # plain binary at target/release/ocg
 Requires Rust 1.80+ and Xcode Command Line Tools (for compiling the native AppKit shell and linking Cocoa). The Objective-C UI layer (`app_darwin.m`) is compiled via [`cc`](https://crates.io/crates/cc) in `build.rs`.
 
 ---
+
+**Version 0.0.4** — panel typography one notch smaller (sidebar marks 15pt, all right-pane text −2pt), and a Used/Remaining switch for the Codex meters (defaults to remaining).
 
 **Version 0.0.3** — Codex provider now shows ChatGPT subscription usage for every `~/.codex*` login (grouped rows, read-only credentials, CLI-assisted refresh, per-account error isolation), plus a percentage badge in the menu bar and a scrollable panel.
 

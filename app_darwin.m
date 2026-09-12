@@ -50,6 +50,8 @@ static const CGFloat kMinFontSize = 9.0;
 @property(strong) NSMutableArray<NSDictionary *> *codexAccountRows;
 /// Optional Codex meter toggles (default off).
 @property(strong) NSButton *showSpendToggle;
+/// Codex meter reading: segment 0 = used, 1 = remaining (default).
+@property(strong) NSSegmentedControl *usedRemainingControl;
 - (void)renderAll;
 @end
 
@@ -497,6 +499,8 @@ static const CGFloat kMinFontSize = 9.0;
   [self clearHolder:self.footerHolder];
   [self.fieldInputs removeAllObjects];
   [self.codexAccountRows removeAllObjects];
+  self.showSpendToggle = nil;
+  self.usedRemainingControl = nil;
   for (NSView *view in [self.content.subviews copy]) {
     [view removeFromSuperview];
   }
@@ -518,6 +522,31 @@ static const CGFloat kMinFontSize = 9.0;
     showSpend.toolTip = @"Show each workspace's spend-control meter";
     [self addRow:showSpend height:20 previous:&previous topGap:10];
     self.showSpendToggle = showSpend;
+
+    // Read the window meters as quota used or quota left.
+    NSView *modeRow = [[NSView alloc] initWithFrame:NSZeroRect];
+    NSTextField *modeLabel =
+        [self label:@"Meters" size:11 weight:NSFontWeightMedium color:[NSColor labelColor]];
+    [modeRow addSubview:modeLabel];
+    NSSegmentedControl *mode =
+        [NSSegmentedControl segmentedControlWithLabels:@[ @"Used", @"Remaining" ]
+                                          trackingMode:NSSegmentSwitchTrackingSelectOne
+                                                target:nil
+                                                action:nil];
+    mode.controlSize = NSControlSizeMini;
+    mode.selectedSegment = [self.state[@"codex_show_remaining"] boolValue] ? 1 : 0;
+    mode.toolTip = @"Show quota used or quota left in the panel";
+    mode.translatesAutoresizingMaskIntoConstraints = NO;
+    [modeRow addSubview:mode];
+    [NSLayoutConstraint activateConstraints:@[
+      [modeLabel.leadingAnchor constraintEqualToAnchor:modeRow.leadingAnchor],
+      [modeLabel.centerYAnchor constraintEqualToAnchor:modeRow.centerYAnchor],
+      [mode.trailingAnchor constraintEqualToAnchor:modeRow.trailingAnchor],
+      [mode.centerYAnchor constraintEqualToAnchor:modeRow.centerYAnchor],
+      [mode.leadingAnchor constraintGreaterThanOrEqualToAnchor:modeLabel.trailingAnchor constant:8],
+    ]];
+    [self addRow:modeRow height:22 previous:&previous topGap:8];
+    self.usedRemainingControl = mode;
   } else {
     NSDictionary *creds = self.state[@"credentials"][active] ?: @{};
     NSArray *fields = [self fieldsForProvider:active];
@@ -787,10 +816,12 @@ static const CGFloat kMinFontSize = 9.0;
         @"enabled" : @(checkbox.state == NSControlStateValueOn),
       }];
     }
-    NSDictionary *settings = @{
-      @"accounts" : payload,
-      @"show_spend" : @(self.showSpendToggle.state == NSControlStateValueOn),
-    };
+    NSMutableDictionary *settings = [NSMutableDictionary dictionary];
+    settings[@"accounts"] = payload;
+    settings[@"show_spend"] = @(self.showSpendToggle.state == NSControlStateValueOn);
+    if (self.usedRemainingControl != nil) {
+      settings[@"show_remaining"] = @(self.usedRemainingControl.selectedSegment == 1);
+    }
     NSData *data = [NSJSONSerialization dataWithJSONObject:settings options:0 error:nil];
     if (data != nil) {
       NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
