@@ -27,6 +27,11 @@ extern void goQuitRequested(void);
 // Declared before OCGAppDelegate so the latter can alloc/init it.
 // ---------------------------------------------------------------------------
 
+// Panel typography: every label in the right-hand pane is drawn this many
+// points smaller than its nominal size, so the whole pane scales from here.
+static const CGFloat kPanelFontDelta = -2.0;
+static const CGFloat kMinFontSize = 9.0;
+
 @interface UsagePanelController : NSViewController
 @property(strong) NSView *sidebar;
 @property(strong) NSView *content;
@@ -121,7 +126,7 @@ extern void goQuitRequested(void);
     [self.headerHolder.leadingAnchor constraintEqualToAnchor:divider.trailingAnchor],
     [self.headerHolder.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
     [self.headerHolder.topAnchor constraintEqualToAnchor:self.view.topAnchor],
-    [self.headerHolder.heightAnchor constraintEqualToConstant:44],
+    [self.headerHolder.heightAnchor constraintEqualToConstant:40],
 
     [self.scrollView.leadingAnchor constraintEqualToAnchor:divider.trailingAnchor],
     [self.scrollView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
@@ -132,7 +137,7 @@ extern void goQuitRequested(void);
     [self.footerHolder.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
     [self.footerHolder.topAnchor constraintEqualToAnchor:self.scrollView.bottomAnchor],
     [self.footerHolder.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-    [self.footerHolder.heightAnchor constraintEqualToConstant:32],
+    [self.footerHolder.heightAnchor constraintEqualToConstant:30],
 
     [self.content.topAnchor constraintEqualToAnchor:self.scrollView.contentView.topAnchor],
     [self.content.leadingAnchor constraintEqualToAnchor:self.scrollView.contentView.leadingAnchor],
@@ -161,7 +166,7 @@ extern void goQuitRequested(void);
     self.scrollHeightConstraint.constant = scrollHeight;
     [self.view layoutSubtreeIfNeeded];
   }
-  NSSize size = NSMakeSize(260, scrollHeight + 76);
+  NSSize size = NSMakeSize(260, scrollHeight + 70);
   if (!NSEqualSizes(self.preferredContentSize, size)) {
     self.preferredContentSize = size;
   }
@@ -220,7 +225,7 @@ extern void goQuitRequested(void);
     button.identifier = providerID;
     button.translatesAutoresizingMaskIntoConstraints = NO;
     button.wantsLayer = YES;
-    button.layer.cornerRadius = 6;
+    button.layer.cornerRadius = 5;
     if (isActive) {
       button.layer.backgroundColor = [[NSColor labelColor] colorWithAlphaComponent:0.08].CGColor;
     }
@@ -229,12 +234,12 @@ extern void goQuitRequested(void);
 
     NSMutableArray *constraints = [NSMutableArray array];
     [constraints addObject:[button.centerXAnchor constraintEqualToAnchor:self.sidebar.centerXAnchor]];
-    [constraints addObject:[button.widthAnchor constraintEqualToConstant:36]];
-    [constraints addObject:[button.heightAnchor constraintEqualToConstant:32]];
+    [constraints addObject:[button.widthAnchor constraintEqualToConstant:30]];
+    [constraints addObject:[button.heightAnchor constraintEqualToConstant:28]];
     if (previous == nil) {
-      [constraints addObject:[button.topAnchor constraintEqualToAnchor:self.sidebar.topAnchor constant:12]];
+      [constraints addObject:[button.topAnchor constraintEqualToAnchor:self.sidebar.topAnchor constant:10]];
     } else {
-      [constraints addObject:[button.topAnchor constraintEqualToAnchor:previous.bottomAnchor constant:6]];
+      [constraints addObject:[button.topAnchor constraintEqualToAnchor:previous.bottomAnchor constant:5]];
     }
     [NSLayoutConstraint activateConstraints:constraints];
     previous = button;
@@ -256,6 +261,7 @@ extern void goQuitRequested(void);
   NSData *svgData = [svg dataUsingEncoding:NSUTF8StringEncoding];
   NSImage *image = [[NSImage alloc] initWithData:svgData];
   image.template = YES;
+  image.size = NSMakeSize(15, 15);
   return image;
 }
 
@@ -392,10 +398,10 @@ extern void goQuitRequested(void);
       if ([group isKindOfClass:[NSString class]] && group.length > 0 &&
           ![group isEqualToString:currentGroup]) {
         NSView *groupRow = [self groupRowWithTitle:group first:(currentGroup == nil)];
-        [self addRow:groupRow height:(currentGroup == nil ? 16 : 24) previous:&previous topGap:2];
+        [self addRow:groupRow height:(currentGroup == nil ? 14 : 21) previous:&previous topGap:2];
         currentGroup = group;
       }
-      [self addRow:[self meterRow:meter] height:46 previous:&previous topGap:5];
+      [self addRow:[self meterRow:meter] height:42 previous:&previous topGap:5];
     }
   }
 
@@ -478,7 +484,7 @@ extern void goQuitRequested(void);
     [detail.leadingAnchor constraintGreaterThanOrEqualToAnchor:label.trailingAnchor constant:8],
     [progress.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
     [progress.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
-    [progress.topAnchor constraintEqualToAnchor:label.bottomAnchor constant:8],
+    [progress.topAnchor constraintEqualToAnchor:label.bottomAnchor constant:7],
     [progress.heightAnchor constraintEqualToConstant:8],
   ]];
   return row;
@@ -507,8 +513,8 @@ extern void goQuitRequested(void);
     NSButton *showSpend = [NSButton checkboxWithTitle:@"Show spend limit" target:nil action:nil];
     showSpend.state = [self.state[@"codex_show_spend"] boolValue] ? NSControlStateValueOn
                                                                   : NSControlStateValueOff;
-    showSpend.controlSize = NSControlSizeSmall;
-    showSpend.font = [NSFont systemFontOfSize:11];
+    showSpend.controlSize = NSControlSizeMini;
+    showSpend.font = [NSFont systemFontOfSize:MAX(kMinFontSize, 11 + kPanelFontDelta)];
     showSpend.toolTip = @"Show each workspace's spend-control meter";
     [self addRow:showSpend height:20 previous:&previous topGap:10];
     self.showSpendToggle = showSpend;
@@ -528,8 +534,8 @@ extern void goQuitRequested(void);
                                   : [[NSTextField alloc] initWithFrame:NSZeroRect];
       input.stringValue = creds[field] ?: @"";
       input.placeholderString = labelText;
-      input.controlSize = NSControlSizeSmall;
-      input.font = [NSFont systemFontOfSize:11];
+      input.controlSize = NSControlSizeMini;
+      input.font = [NSFont systemFontOfSize:MAX(kMinFontSize, 11 + kPanelFontDelta)];
       [self addRow:input height:22 previous:&previous topGap:4];
       self.fieldInputs[field] = input;
     }
@@ -541,7 +547,7 @@ extern void goQuitRequested(void);
     NSButton *rescan = [NSButton buttonWithTitle:@"Rescan ~/.codex*"
                                           target:self
                                           action:@selector(rescanClicked:)];
-    rescan.controlSize = NSControlSizeSmall;
+    rescan.controlSize = NSControlSizeMini;
     [self addRow:rescan height:24 previous:&previous topGap:14];
     lastButton = rescan;
   }
@@ -549,7 +555,7 @@ extern void goQuitRequested(void);
   NSButton *saveButton = [NSButton buttonWithTitle:@"Save & Refresh"
                                              target:self
                                             action:@selector(saveClicked:)];
-  saveButton.controlSize = NSControlSizeSmall;
+  saveButton.controlSize = NSControlSizeMini;
   [self addRow:saveButton height:24 previous:&previous topGap:(lastButton == nil ? 14 : 8)];
 
   if (previous != nil) {
@@ -589,8 +595,8 @@ extern void goQuitRequested(void);
     NSTextField *nameField = [[NSTextField alloc] initWithFrame:NSZeroRect];
     nameField.stringValue = account[@"label"] ?: @"";
     nameField.placeholderString = account[@"email"] ?: @"name";
-    nameField.controlSize = NSControlSizeSmall;
-    nameField.font = [NSFont systemFontOfSize:11];
+    nameField.controlSize = NSControlSizeMini;
+    nameField.font = [NSFont systemFontOfSize:MAX(kMinFontSize, 11 + kPanelFontDelta)];
     nameField.translatesAutoresizingMaskIntoConstraints = NO;
     [row addSubview:nameField];
 
@@ -700,13 +706,13 @@ extern void goQuitRequested(void);
   NSButton *refresh =
       [NSButton buttonWithTitle:@"Refresh" target:self action:@selector(refreshClicked:)];
   refresh.bezelStyle = NSBezelStyleAccessoryBar;
-  refresh.controlSize = NSControlSizeSmall;
+  refresh.controlSize = NSControlSizeMini;
   refresh.translatesAutoresizingMaskIntoConstraints = NO;
   [row addSubview:refresh];
 
   NSButton *quit = [NSButton buttonWithTitle:@"Quit" target:self action:@selector(quitClicked:)];
   quit.bezelStyle = NSBezelStyleAccessoryBar;
-  quit.controlSize = NSControlSizeSmall;
+  quit.controlSize = NSControlSizeMini;
   quit.translatesAutoresizingMaskIntoConstraints = NO;
   [row addSubview:quit];
 
@@ -719,14 +725,14 @@ extern void goQuitRequested(void);
     [refresh.topAnchor constraintEqualToAnchor:topLine.bottomAnchor constant:6],
     [quit.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-12],
     [quit.centerYAnchor constraintEqualToAnchor:refresh.centerYAnchor],
-    [row.heightAnchor constraintEqualToConstant:32],
+    [row.heightAnchor constraintEqualToConstant:30],
   ]];
   return row;
 }
 
 - (NSTextField *)label:(NSString *)text size:(CGFloat)size weight:(NSFontWeight)weight color:(NSColor *)color {
   NSTextField *label = [NSTextField labelWithString:text ?: @""];
-  label.font = [NSFont systemFontOfSize:size weight:weight];
+  label.font = [NSFont systemFontOfSize:MAX(kMinFontSize, size + kPanelFontDelta) weight:weight];
   label.textColor = color;
   label.lineBreakMode = NSLineBreakByTruncatingTail;
   label.translatesAutoresizingMaskIntoConstraints = NO;
