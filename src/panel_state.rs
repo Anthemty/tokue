@@ -5,8 +5,9 @@
 
 use serde::Serialize;
 
+use crate::codex_accounts;
 use crate::config::Config;
-use crate::providers::{PROVIDERS, label};
+use crate::providers::{label, PROVIDERS};
 use crate::state::{updated_at_string, PROVIDER_CACHE};
 
 #[derive(Serialize)]
@@ -17,12 +18,30 @@ struct PanelState {
     providers: Vec<PanelProvider>,
     results: std::collections::BTreeMap<String, PanelResult>,
     credentials: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    codex_accounts: Vec<PanelCodexAccount>,
+    codex_show_spend: bool,
 }
 
 #[derive(Serialize)]
 struct PanelProvider {
     id: String,
     label: String,
+}
+
+/// One row in the Codex account settings list.
+#[derive(Serialize)]
+struct PanelCodexAccount {
+    home: String,
+    home_display: String,
+    label: String,
+    email: String,
+    plan: String,
+    enabled: bool,
+    /// Set when another home holds the same ChatGPT account.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duplicate_of: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -39,6 +58,8 @@ struct PanelMeter {
     label: String,
     percent: i32,
     detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    group: Option<String>,
 }
 
 pub fn build_json(cfg: &Config) -> String {
@@ -49,6 +70,8 @@ pub fn build_json(cfg: &Config) -> String {
         providers: Vec::with_capacity(PROVIDERS.len()),
         results: std::collections::BTreeMap::new(),
         credentials: std::collections::BTreeMap::new(),
+        codex_accounts: Vec::new(),
+        codex_show_spend: cfg.codex.show_spend,
     };
 
     for &id in PROVIDERS {
@@ -87,6 +110,7 @@ pub fn build_json(cfg: &Config) -> String {
                             label: m.label.clone(),
                             percent: m.percent,
                             detail: m.detail.clone(),
+                            group: m.group.clone(),
                         })
                         .collect();
                     PanelResult {
@@ -117,10 +141,50 @@ pub fn build_json(cfg: &Config) -> String {
     mx.insert("api_key".to_string(), cfg.minimax.api_key.clone());
     state.credentials.insert("minimax".to_string(), mx);
 
-    let mut cx = std::collections::BTreeMap::new();
-    cx.insert("api_key".to_string(), cfg.codex.api_key.clone());
-    cx.insert("org_id".to_string(), cfg.codex.org_id.clone());
-    state.credentials.insert("codex".to_string(), cx);
+    // Codex settings list: every configured (or discovered) home with the
+    // identity we can read offline, so the panel can label rows before any
+    // network call.
+    let specs = codex_accounts::effective_accounts(cfg);
+    let mut identities = codex_accounts::load_enabled(cfg);
+    // load_enabled drops disabled rows; reload them so they can be re-enabled.
+    let enabled_homes: Vec<String> = identities.iter().map(|a| a.home.clone()).collect();
+    for spec in specs.iter().filter(|s| !s.enabled) {
+        let expanded = codex_accounts::expand_home(&spec.home);
+        if !enabled_homes.contains(&expanded) {
+            identities.push(codex_accounts::load(&spec.home, &spec.label));
+        }
+    }
+
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for acct in &identities {
+        let mut duplicate_of = acct.duplicate_of.clone();
+        if duplicate_of.is_none() && !acct.account_id.is_empty() {
+            if let Some((_, first)) = seen.iter().find(|(id, _)| *id == acct.account_id) {
+                duplicate_of = Some(first.clone());
+            } else {
+                seen.push((acct.account_id.clone(), acct.home_display.clone()));
+            }
+        }
+        let enabled = specs
+            .iter()
+            .find(|s| codex_accounts::expand_home(&s.home) == acct.home)
+            .map(|s| s.enabled)
+            .unwrap_or(true);
+        state.codex_accounts.push(PanelCodexAccount {
+            home: acct.home.clone(),
+            home_display: acct.home_display.clone(),
+            label: acct.label.clone(),
+            email: if acct.email.is_empty() { String::new() } else { acct.email.clone() },
+            plan: if acct.plan.is_empty() {
+                String::new()
+            } else {
+                codex_accounts::plan_display(&acct.plan)
+            },
+            enabled,
+            duplicate_of,
+            error: acct.problem.clone(),
+        });
+    }
 
     serde_json::to_string(&state).unwrap_or_else(|_| {
         r#"{"active":"","providers":[],"results":{},"credentials":{}}"#.to_string()

@@ -108,9 +108,9 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
     let max_pct = r.percent.max(w.percent).max(mo.percent);
 
     let meters = vec![
-        UsageMeter { label: "Rolling".into(), percent: r.percent, detail: format_duration(r.reset_in_sec) },
-        UsageMeter { label: "Weekly".into(), percent: w.percent, detail: format_duration(w.reset_in_sec) },
-        UsageMeter { label: "Monthly".into(), percent: mo.percent, detail: format_duration(mo.reset_in_sec) },
+        UsageMeter::new("Rolling", r.percent, format_duration(r.reset_in_sec)),
+        UsageMeter::new("Weekly", w.percent, format_duration(w.reset_in_sec)),
+        UsageMeter::new("Monthly", mo.percent, format_duration(mo.reset_in_sec)),
     ];
 
     ProviderFetchResult::ok(max_pct, meters)

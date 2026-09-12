@@ -178,8 +178,8 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
     let criticality = interval_used.max(weekly_used);
 
     let meters = vec![
-        UsageMeter { label: "5h".into(), percent: interval_used, detail: reset_5h },
-        UsageMeter { label: "Weekly".into(), percent: weekly_used, detail: reset_week },
+        UsageMeter::new("5h", interval_used, reset_5h),
+        UsageMeter::new("Weekly", weekly_used, reset_week),
     ];
 
     ProviderFetchResult::ok(criticality, meters)

@@ -6,6 +6,7 @@
 //   - REFRESH: serialises refresh cycles so fetches don't stack (Mutex)
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{LazyLock, Mutex, RwLock};
 
 use chrono::{DateTime, Local};
@@ -23,6 +24,23 @@ pub static LAST_UPDATED: LazyLock<RwLock<Option<DateTime<Local>>>> =
 /// Serialises refresh cycles so concurrent fetch requests don't stack
 /// (replaces Go's refreshMu).
 pub static REFRESH_MU: Mutex<()> = Mutex::new(());
+
+/// Consecutive cycles in which every provider failed — drives backoff.
+static FAILED_CYCLES: AtomicU32 = AtomicU32::new(0);
+
+/// Record how a cycle went (all providers failed ⇒ back off).
+pub fn record_cycle(failed: usize, total: usize) {
+    if total > 0 && failed == total {
+        FAILED_CYCLES.fetch_add(1, Ordering::Relaxed);
+    } else {
+        FAILED_CYCLES.store(0, Ordering::Relaxed);
+    }
+}
+
+/// Number of consecutive fully-failed cycles.
+pub fn consecutive_failed_cycles() -> u32 {
+    FAILED_CYCLES.load(Ordering::Relaxed)
+}
 
 /// Format last_updated as "HH:MM:SS" (local), or "" if never.
 /// Matches Go's lastUpdated.Format("15:04:05").

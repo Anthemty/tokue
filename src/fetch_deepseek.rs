@@ -96,21 +96,9 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
     };
 
     let meters = vec![
-        UsageMeter {
-            label: "Balance".into(),
-            percent: criticality,
-            detail: format!("{}{} left", cur, info.total_balance),
-        },
-        UsageMeter {
-            label: "Granted".into(),
-            percent: 0,
-            detail: format!("{}{}", cur, info.granted_balance),
-        },
-        UsageMeter {
-            label: "Topped".into(),
-            percent: 0,
-            detail: format!("{}{}", cur, info.topped_up_balance),
-        },
+        UsageMeter::new("Balance", criticality, format!("{}{} left", cur, info.total_balance)),
+        UsageMeter::new("Granted", 0, format!("{}{}", cur, info.granted_balance)),
+        UsageMeter::new("Topped", 0, format!("{}{}", cur, info.topped_up_balance)),
     ];
 
     ProviderFetchResult::ok(criticality, meters)

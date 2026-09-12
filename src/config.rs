@@ -14,6 +14,9 @@ use crate::providers;
 pub struct Config {
     #[serde(rename = "active_provider", default)]
     pub active_provider: String,
+    /// Refresh interval override, in minutes (default 15).
+    #[serde(rename = "refresh_minutes", default, skip_serializing_if = "Option::is_none")]
+    pub refresh_minutes: Option<u32>,
     #[serde(default)]
     pub opencode: OpenCodeConfig,
     #[serde(default)]
@@ -44,12 +47,43 @@ pub struct MinimaxConfig {
     pub api_key: String,
 }
 
+/// Codex: one or more ChatGPT subscription logins, each in its own CODEX_HOME
+/// (~/.codex, ~/.codex2, …). An empty `accounts` list means "auto-discover".
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct CodexConfig {
-    #[serde(rename = "api_key", default)]
+    #[serde(default)]
+    pub accounts: Vec<CodexAccount>,
+    /// Per-provider refresh interval override, in minutes.
+    #[serde(rename = "refresh_minutes", default, skip_serializing_if = "Option::is_none")]
+    pub refresh_minutes: Option<u32>,
+    /// Show the workspace spend-control row. Off by default: it is a 0-credit
+    /// cap on most plans and only adds noise.
+    #[serde(rename = "show_spend", default)]
+    pub show_spend: bool,
+    /// Legacy API-billing fields (pre-subscription builds). Loaded so old
+    /// configs keep parsing, dropped on the next save. `allow(dead_code)`
+    /// because nothing reads them any more.
+    #[allow(dead_code)]
+    #[serde(rename = "api_key", default, skip_serializing)]
     pub api_key: String,
-    #[serde(rename = "org_id", default)]
+    #[allow(dead_code)]
+    #[serde(rename = "org_id", default, skip_serializing)]
     pub org_id: String,
+}
+
+/// One ChatGPT login: a CODEX_HOME path plus optional display name.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct CodexAccount {
+    /// Home directory, `~` allowed.
+    pub home: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Legacy single-provider format: workspace_id / auth_cookie at the top level.
@@ -70,6 +104,13 @@ fn config_dir() -> io::Result<PathBuf> {
 
 fn config_path() -> io::Result<PathBuf> {
     Ok(config_dir()?.join("config.json"))
+}
+
+/// ~/.config/ocg/cache — last-good snapshots so a restart paints immediately.
+pub fn cache_dir() -> io::Result<PathBuf> {
+    let dir = config_dir()?.join("cache");
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
 }
 
 /// Load config, migrating legacy format if needed. Never fails: on any error

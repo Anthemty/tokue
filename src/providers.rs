@@ -23,11 +23,32 @@ pub fn label(id: &str) -> &'static str {
 }
 
 /// A single usage row pushed to the UI progress bar renderer.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct UsageMeter {
     pub label: String,
     pub percent: i32,
     pub detail: String,
+    /// Heading this meter belongs under (multi-account providers). The UI draws
+    /// a section header whenever the group changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+}
+
+impl UsageMeter {
+    /// Meter without a group header (single-account providers).
+    pub fn new(label: impl Into<String>, percent: i32, detail: impl Into<String>) -> Self {
+        Self { label: label.into(), percent, detail: detail.into(), group: None }
+    }
+
+    /// Meter under a group header.
+    pub fn grouped(
+        group: impl Into<String>,
+        label: impl Into<String>,
+        percent: i32,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self { label: label.into(), percent, detail: detail.into(), group: Some(group.into()) }
+    }
 }
 
 /// The outcome of fetching one provider. `Err` is `Some` on failure.
@@ -37,15 +58,22 @@ pub struct ProviderFetchResult {
     pub err: Option<String>,
     /// Structured rows for progress rendering (sent to UI).
     pub meters: Vec<UsageMeter>,
+    /// Optional multi-line breakdown for the status-item tooltip.
+    pub summary: Option<String>,
 }
 
 impl ProviderFetchResult {
     pub fn ok(criticality: i32, meters: Vec<UsageMeter>) -> Self {
-        Self { criticality, err: None, meters }
+        Self { criticality, err: None, meters, summary: None }
+    }
+
+    /// Success carrying a tooltip breakdown (used by multi-account providers).
+    pub fn ok_detailed(criticality: i32, meters: Vec<UsageMeter>, summary: String) -> Self {
+        Self { criticality, err: None, meters, summary: Some(summary) }
     }
 
     pub fn err(msg: impl Into<String>) -> Self {
-        Self { criticality: 0, err: Some(msg.into()), meters: Vec::new() }
+        Self { criticality: 0, err: Some(msg.into()), meters: Vec::new(), summary: None }
     }
 }
 
