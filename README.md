@@ -109,7 +109,7 @@ Requires Rust 1.80+ and Xcode Command Line Tools (for compiling the native AppKi
 
 ---
 
-**Version 0.0.4** — panel typography one notch smaller (sidebar marks 15pt, all right-pane text −2pt), and a Used/Remaining switch for the Codex meters (defaults to remaining).
+**Version 0.0.4** — panel typography one notch smaller (sidebar marks 15pt in a 36pt rail with ~10pt of air, all right-pane text −2pt), and a Used/Remaining switch for the Codex meters (defaults to remaining).
 
 **Version 0.0.3** — Codex provider now shows ChatGPT subscription usage for every `~/.codex*` login (grouped rows, read-only credentials, CLI-assisted refresh, per-account error isolation), plus a percentage badge in the menu bar and a scrollable panel.
 
