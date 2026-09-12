@@ -20,6 +20,8 @@ pub struct Config {
     pub deepseek: DeepSeekConfig,
     #[serde(default)]
     pub minimax: MinimaxConfig,
+    #[serde(default)]
+    pub codex: CodexConfig,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -40,6 +42,14 @@ pub struct DeepSeekConfig {
 pub struct MinimaxConfig {
     #[serde(rename = "api_key", default)]
     pub api_key: String,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct CodexConfig {
+    #[serde(rename = "api_key", default)]
+    pub api_key: String,
+    #[serde(rename = "org_id", default)]
+    pub org_id: String,
 }
 
 /// Legacy single-provider format: workspace_id / auth_cookie at the top level.

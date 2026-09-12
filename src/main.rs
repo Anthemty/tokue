@@ -5,6 +5,7 @@
 // to the UI via the FFI mutators (which dispatch_async to the main queue).
 
 mod config;
+mod fetch_codex;
 mod fetch_deepseek;
 mod fetch_minimax;
 mod fetch_opencode;
@@ -52,6 +53,7 @@ fn fetch_all_providers() {
                     "opencode" => fetch_opencode::fetch(&cfg),
                     "deepseek" => fetch_deepseek::fetch(&cfg),
                     "minimax" => fetch_minimax::fetch(&cfg),
+                    "codex" => fetch_codex::fetch(&cfg),
                     _ => ProviderFetchResult::err(format!("unknown provider: {}", p)),
                 };
                 (p.to_string(), r)

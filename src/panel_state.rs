@@ -117,6 +117,11 @@ pub fn build_json(cfg: &Config) -> String {
     mx.insert("api_key".to_string(), cfg.minimax.api_key.clone());
     state.credentials.insert("minimax".to_string(), mx);
 
+    let mut cx = std::collections::BTreeMap::new();
+    cx.insert("api_key".to_string(), cfg.codex.api_key.clone());
+    cx.insert("org_id".to_string(), cfg.codex.org_id.clone());
+    state.credentials.insert("codex".to_string(), cx);
+
     serde_json::to_string(&state).unwrap_or_else(|_| {
         r#"{"active":"","providers":[],"results":{},"credentials":{}}"#.to_string()
     })

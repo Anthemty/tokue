@@ -6,9 +6,10 @@ use serde::Serialize;
 pub const OPENCODE: &str = "opencode";
 pub const DEEPSEEK: &str = "deepseek";
 pub const MINIMAX: &str = "minimax";
+pub const CODEX: &str = "codex";
 
 /// All known providers, in sidebar order.
-pub const PROVIDERS: &[&str] = &[OPENCODE, DEEPSEEK, MINIMAX];
+pub const PROVIDERS: &[&str] = &[OPENCODE, DEEPSEEK, MINIMAX, CODEX];
 
 /// Display label for a provider id.
 pub fn label(id: &str) -> &'static str {
@@ -16,6 +17,7 @@ pub fn label(id: &str) -> &'static str {
         OPENCODE => "OpenCode Go",
         DEEPSEEK => "DeepSeek",
         MINIMAX => "MiniMax",
+        CODEX => "Codex",
         _ => "Unknown",
     }
 }
