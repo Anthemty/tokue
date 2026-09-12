@@ -13,6 +13,53 @@ extern void goQuitRequested(void);
 // OCGFlipView: flipped container so a scrolled document starts at the top.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Colour system (shared by the panel and the menu bar badge)
+//
+// Muted, low-saturation versions of the traffic-light colours: the system ones
+// glare against a dark popover. Grey is structure only (tracks, separators,
+// secondary text) — a healthy quota is green, not grey.
+// ---------------------------------------------------------------------------
+
+static NSColor *OCGAdaptive(NSColor *dark, NSColor *light) {
+  return [NSColor colorWithName:nil
+               dynamicProvider:^NSColor *(NSAppearance *appearance) {
+                 NSAppearanceName match = [appearance
+                     bestMatchFromAppearancesWithNames:@[ NSAppearanceNameAqua,
+                                                          NSAppearanceNameDarkAqua ]];
+                 return [match isEqualToString:NSAppearanceNameDarkAqua] ? dark : light;
+               }];
+}
+
+/// Plenty of quota left — a soft emerald rather than systemGreen.
+static NSColor *OCGOkColor(void) {
+  return OCGAdaptive([NSColor colorWithSRGBRed:0.38 green:0.76 blue:0.55 alpha:1.0],
+                     [NSColor colorWithSRGBRed:0.16 green:0.52 blue:0.35 alpha:1.0]);
+}
+
+/// Less than 30% left.
+static NSColor *OCGWarnColor(void) {
+  return OCGAdaptive([NSColor colorWithSRGBRed:0.89 green:0.72 blue:0.40 alpha:1.0],
+                     [NSColor colorWithSRGBRed:0.68 green:0.47 blue:0.08 alpha:1.0]);
+}
+
+/// Less than 10% left.
+static NSColor *OCGCritColor(void) {
+  return OCGAdaptive([NSColor colorWithSRGBRed:0.91 green:0.50 blue:0.48 alpha:1.0],
+                     [NSColor colorWithSRGBRed:0.72 green:0.24 blue:0.22 alpha:1.0]);
+}
+
+/// Status colour for a quota that is `used` percent consumed.
+static NSColor *OCGStatusColor(int used) {
+  if (used > 90) {
+    return OCGCritColor();
+  }
+  if (used > 70) {
+    return OCGWarnColor();
+  }
+  return OCGOkColor();
+}
+
 @interface OCGFlipView : NSView
 @end
 
@@ -176,6 +223,11 @@ static const CGFloat kMinFontSize = 9.0;
 - (void)updatePreferredSize {
   CGFloat contentHeight = self.content.fittingSize.height;
   if (contentHeight <= 0) {
+    // Width not resolved yet: lay out once so the row constraints can compute.
+    [self.view layoutSubtreeIfNeeded];
+    contentHeight = self.content.fittingSize.height;
+  }
+  if (contentHeight <= 0) {
     return;
   }
   CGFloat chrome = 70.0; // header + footer
@@ -187,6 +239,10 @@ static const CGFloat kMinFontSize = 9.0;
   NSSize size = NSMakeSize(260, scrollHeight + chrome);
   if (!NSEqualSizes(self.preferredContentSize, size)) {
     self.preferredContentSize = size;
+    if (getenv("OCG_DEBUG_SIZE") != NULL) {
+      fprintf(stderr, "[ocg] 面板高度 -> %.0fpt (内容 %.0fpt, 屏幕可用 %.0fpt)\n",
+              size.height, contentHeight, [self maxPanelHeight] - chrome);
+    }
   }
   // The account list can be taller than the popover. Whenever the content
   // height changes (first paint, accounts appearing) snap back to the top so
@@ -251,6 +307,11 @@ static const CGFloat kMinFontSize = 9.0;
   } else {
     [self renderUsage];
   }
+  // viewDidLayout only fires once (before the rows exist), so the popover has to
+  // be told its new height here — otherwise it keeps the initial frame and clips
+  // the account list.
+  [self.view layoutSubtreeIfNeeded];
+  [self updatePreferredSize];
 }
 
 // ---------- sidebar ----------
@@ -595,26 +656,13 @@ static const CGFloat kMinFontSize = 9.0;
   return track;
 }
 
-/// The panel reads status by colour, so the healthy state is green rather than
-/// grey — grey is reserved for structure (tracks, separators, secondary text):
-///
-///   green   plenty of quota left
-///   amber   less than 30% left
-///   red     less than 10% left
-///   neutral rows that are not quota (credits, reset credits)
+/// Nil for rows that are not quota (credits, reset credits).
 - (NSColor *)severityColor:(NSDictionary *)meter {
   NSNumber *severity = meter[@"severity"];
   if (![severity isKindOfClass:[NSNumber class]]) {
     return nil;
   }
-  int used = severity.intValue;
-  if (used > 90) {
-    return [NSColor systemRedColor];
-  }
-  if (used > 70) {
-    return [NSColor systemOrangeColor];
-  }
-  return [NSColor systemGreenColor];
+  return OCGStatusColor(severity.intValue);
 }
 
 /// Structure colour: card surface, borders, inert bars.
@@ -1203,12 +1251,7 @@ static const CGFloat kMinFontSize = 9.0;
     // Colour via an attributed title, never contentTintColor: on macOS 26 the
     // latter makes the whole status item stop drawing (which used to hide the
     // badge exactly when usage went critical).
-    NSColor *tint = [NSColor systemGreenColor];
-    if (severity > 90) {
-      tint = [NSColor systemRedColor];
-    } else if (severity > 70) {
-      tint = [NSColor systemOrangeColor];
-    }
+    NSColor *tint = OCGStatusColor(severity);
     NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
     attributes[NSFontAttributeName] = button.font;
     if (tint != nil) {
