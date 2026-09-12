@@ -32,12 +32,16 @@ pub struct UsageMeter {
     /// a section header whenever the group changes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// Identity of the account this meter belongs to (a CODEX_HOME path), so the
+    /// UI can hide/show one account without asking the backend.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 impl UsageMeter {
     /// Meter without a group header (single-account providers).
     pub fn new(label: impl Into<String>, percent: i32, detail: impl Into<String>) -> Self {
-        Self { label: label.into(), percent, detail: detail.into(), group: None }
+        Self { label: label.into(), percent, detail: detail.into(), group: None, key: None }
     }
 
     /// Meter under a group header.
@@ -47,7 +51,13 @@ impl UsageMeter {
         percent: i32,
         detail: impl Into<String>,
     ) -> Self {
-        Self { label: label.into(), percent, detail: detail.into(), group: Some(group.into()) }
+        Self {
+            label: label.into(),
+            percent,
+            detail: detail.into(),
+            group: Some(group.into()),
+            key: None,
+        }
     }
 }
 

@@ -350,7 +350,7 @@ struct CodexSettings {
 fn parse_codex_settings(json: &str) -> Option<CodexSettings> {
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
     let flag = |map: &serde_json::Map<String, serde_json::Value>, key: &str, default: bool| {
-        map.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
+        json_bool(map.get(key), default)
     };
     match &value {
         serde_json::Value::Array(_) => Some(CodexSettings {
@@ -369,6 +369,21 @@ fn parse_codex_settings(json: &str) -> Option<CodexSettings> {
     }
 }
 
+/// JSON booleans or 0/1 numbers: Foundation's JSON writer emits numbers for
+/// boxed BOOLs, so a strict `as_bool()` silently flipped disabled accounts back on.
+fn json_bool(value: Option<&serde_json::Value>, default: bool) -> bool {
+    match value {
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(serde_json::Value::Number(n)) => n.as_i64().map(|i| i != 0).unwrap_or(default),
+        Some(serde_json::Value::String(s)) => match s.as_str() {
+            "true" | "1" => true,
+            "false" | "0" => false,
+            _ => default,
+        },
+        _ => default,
+    }
+}
+
 fn parse_accounts(value: &serde_json::Value) -> Option<Vec<config::CodexAccount>> {
     let array = value.as_array()?;
     let mut out: Vec<config::CodexAccount> = Vec::with_capacity(array.len());
@@ -384,7 +399,7 @@ fn parse_accounts(value: &serde_json::Value) -> Option<Vec<config::CodexAccount>
         out.push(config::CodexAccount {
             home: home.to_string(),
             label: entry.get("label").and_then(|l| l.as_str()).unwrap_or_default().to_string(),
-            enabled: entry.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true),
+            enabled: json_bool(entry.get("enabled"), true),
         });
     }
     Some(out)
@@ -455,6 +470,22 @@ mod tests {
         assert!(settings.show_spend);
         assert!(!settings.show_remaining);
         assert!(settings.show_today);
+    }
+
+    #[test]
+    fn accepts_foundation_style_numeric_booleans() {
+        // NSJSONSerialization writes @(NO) as 0, which used to re-enable accounts.
+        let settings = parse_codex_settings(
+            r#"{"accounts":[{"home":"~/.codex","label":"","enabled":0},
+                            {"home":"~/.codex2","label":"","enabled":1}],
+                "show_spend":0,"show_remaining":1,"show_today":0}"#,
+        )
+        .unwrap();
+        assert!(!settings.accounts[0].enabled);
+        assert!(settings.accounts[1].enabled);
+        assert!(!settings.show_spend);
+        assert!(settings.show_remaining);
+        assert!(!settings.show_today);
     }
 
     #[test]

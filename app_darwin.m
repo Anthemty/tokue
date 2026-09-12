@@ -32,7 +32,7 @@ extern void goQuitRequested(void);
 static const CGFloat kPanelFontDelta = -2.0;
 static const CGFloat kMinFontSize = 9.0;
 
-@interface UsagePanelController : NSViewController
+@interface UsagePanelController : NSViewController <NSTextFieldDelegate>
 @property(strong) NSView *sidebar;
 @property(strong) NSView *content;
 @property(strong) NSView *contentContainer;
@@ -45,6 +45,11 @@ static const CGFloat kMinFontSize = 9.0;
 @property(strong) NSMutableDictionary<NSString *, NSButton *> *providerButtons;
 @property(strong) NSDictionary *state;
 @property BOOL settingsVisible;
+/// Set while the settings pane holds edits that are not saved yet.
+@property BOOL settingsDirty;
+/// Accounts hidden locally, by CODEX_HOME. Unticking a box hides the account
+/// right away; Save & Refresh makes it stick for the next launch too.
+@property(strong) NSMutableSet<NSString *> *hiddenHomes;
 @property(strong) NSMutableDictionary<NSString *, NSTextField *> *fieldInputs;
 /// Rows of the Codex account editor: @{@"home", @"checkbox", @"labelField"}.
 @property(strong) NSMutableArray<NSDictionary *> *codexAccountRows;
@@ -64,6 +69,7 @@ static const CGFloat kMinFontSize = 9.0;
     _providerButtons = [NSMutableDictionary dictionary];
     _fieldInputs = [NSMutableDictionary dictionary];
     _codexAccountRows = [NSMutableArray array];
+    _hiddenHomes = [NSMutableSet set];
     _settingsVisible = NO;
   }
   return self;
@@ -190,9 +196,43 @@ static const CGFloat kMinFontSize = 9.0;
     return;
   }
   self.state = parsed;
-  if (self.viewIfLoaded != nil) {
-    [self renderAll];
+  if (self.viewIfLoaded == nil) {
+    return;
   }
+  // A background refresh must not rebuild the settings pane while it holds
+  // unsaved edits — that silently reverted tick boxes and names before.
+  if (self.settingsVisible && self.settingsDirty) {
+    return;
+  }
+  [self renderAll];
+}
+
+// ---------- edit tracking ----------
+
+/// Any control the user touches marks the pane dirty.
+- (void)settingsEdited:(id)sender {
+  self.settingsDirty = YES;
+}
+
+- (void)controlTextDidChange:(NSNotification *)note {
+  self.settingsDirty = YES;
+}
+
+/// Tick box in the Codex account list: hide/show that account in the panel
+/// immediately. Nothing is fetched or written here — the panel simply stops
+/// rendering that account's rows; Save & Refresh persists the choice.
+- (void)accountToggled:(NSButton *)sender {
+  NSString *home = sender.identifier ?: @"";
+  if (home.length == 0) {
+    return;
+  }
+  self.settingsDirty = YES;
+  if (sender.state == NSControlStateValueOn) {
+    [self.hiddenHomes removeObject:home];
+  } else {
+    [self.hiddenHomes addObject:home];
+  }
+  [self renderAll];
 }
 
 - (void)renderAll {
@@ -397,6 +437,10 @@ static const CGFloat kMinFontSize = 9.0;
     NSArray *meters = result[@"meters"] ?: @[];
     NSString *currentGroup = nil;
     for (NSDictionary *meter in meters) {
+      NSString *key = meter[@"key"];
+      if ([key isKindOfClass:[NSString class]] && [self.hiddenHomes containsObject:key]) {
+        continue; // unticked in settings: hidden locally, no refetch needed
+      }
       NSString *group = meter[@"group"];
       if ([group isKindOfClass:[NSString class]] && group.length > 0 &&
           ![group isEqualToString:currentGroup]) {
@@ -516,7 +560,9 @@ static const CGFloat kMinFontSize = 9.0;
     [self renderCodexAccountsInto:&previous];
     // Off by default: the workspace spend cap is 0 credits on most plans and
     // only adds a permanently-red row.
-    NSButton *showSpend = [NSButton checkboxWithTitle:@"Show spend limit" target:nil action:nil];
+    NSButton *showSpend = [NSButton checkboxWithTitle:@"Show spend limit"
+                                               target:self
+                                               action:@selector(settingsEdited:)];
     showSpend.state = [self.state[@"codex_show_spend"] boolValue] ? NSControlStateValueOn
                                                                   : NSControlStateValueOff;
     showSpend.controlSize = NSControlSizeMini;
@@ -526,7 +572,9 @@ static const CGFloat kMinFontSize = 9.0;
     self.showSpendToggle = showSpend;
 
     // "Today" is computed from the SQLite history, so it is opt-in like spend.
-    NSButton *showToday = [NSButton checkboxWithTitle:@"Show today's usage" target:nil action:nil];
+    NSButton *showToday = [NSButton checkboxWithTitle:@"Show today's usage"
+                                               target:self
+                                               action:@selector(settingsEdited:)];
     showToday.state = [self.state[@"codex_show_today"] boolValue] ? NSControlStateValueOn
                                                                   : NSControlStateValueOff;
     showToday.controlSize = NSControlSizeMini;
@@ -543,8 +591,8 @@ static const CGFloat kMinFontSize = 9.0;
     NSSegmentedControl *mode =
         [NSSegmentedControl segmentedControlWithLabels:@[ @"Used", @"Remaining" ]
                                           trackingMode:NSSegmentSwitchTrackingSelectOne
-                                                target:nil
-                                                action:nil];
+                                                target:self
+                                                action:@selector(settingsEdited:)];
     mode.controlSize = NSControlSizeMini;
     mode.selectedSegment = [self.state[@"codex_show_remaining"] boolValue] ? 1 : 0;
     mode.toolTip = @"Show quota used or quota left in the panel";
@@ -575,6 +623,7 @@ static const CGFloat kMinFontSize = 9.0;
                                   : [[NSTextField alloc] initWithFrame:NSZeroRect];
       input.stringValue = creds[field] ?: @"";
       input.placeholderString = labelText;
+      input.delegate = self;
       input.controlSize = NSControlSizeMini;
       input.font = [NSFont systemFontOfSize:MAX(kMinFontSize, 11 + kPanelFontDelta)];
       [self addRow:input height:22 previous:&previous topGap:4];
@@ -627,8 +676,13 @@ static const CGFloat kMinFontSize = 9.0;
   for (NSDictionary *account in accounts) {
     NSView *row = [[NSView alloc] initWithFrame:NSZeroRect];
 
-    NSButton *toggle = [NSButton checkboxWithTitle:@"" target:nil action:nil];
-    toggle.state = [account[@"enabled"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
+    NSButton *toggle = [NSButton checkboxWithTitle:@""
+                                            target:self
+                                            action:@selector(accountToggled:)];
+    NSString *home = account[@"home"] ?: @"";
+    toggle.identifier = home;
+    BOOL shown = [account[@"enabled"] boolValue] && ![self.hiddenHomes containsObject:home];
+    toggle.state = shown ? NSControlStateValueOn : NSControlStateValueOff;
     toggle.toolTip = @"Show this account in the usage panel";
     toggle.translatesAutoresizingMaskIntoConstraints = NO;
     [row addSubview:toggle];
@@ -637,6 +691,7 @@ static const CGFloat kMinFontSize = 9.0;
     nameField.stringValue = account[@"label"] ?: @"";
     nameField.placeholderString = account[@"email"] ?: @"name";
     nameField.controlSize = NSControlSizeMini;
+    nameField.delegate = self;
     nameField.font = [NSFont systemFontOfSize:MAX(kMinFontSize, 11 + kPanelFontDelta)];
     nameField.translatesAutoresizingMaskIntoConstraints = NO;
     [row addSubview:nameField];
@@ -794,6 +849,7 @@ static const CGFloat kMinFontSize = 9.0;
 
 - (void)toggleSettings:(id)sender {
   self.settingsVisible = !self.settingsVisible;
+  self.settingsDirty = NO;
   [self renderAll];
 }
 
@@ -842,6 +898,7 @@ static const CGFloat kMinFontSize = 9.0;
       NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
       goSaveCodexAccounts(json.UTF8String);
     }
+    self.settingsDirty = NO;
     self.settingsVisible = NO;
     return;
   }
@@ -855,6 +912,7 @@ static const CGFloat kMinFontSize = 9.0;
     }
     goSaveCredentials(active.UTF8String, field.UTF8String, input.stringValue.UTF8String);
   }
+  self.settingsDirty = NO;
   self.settingsVisible = NO;
 }
 

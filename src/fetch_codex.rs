@@ -613,6 +613,8 @@ fn meters_for(
 ) -> Vec<UsageMeter> {
     let show_remaining = opts.show_remaining;
     let show_spend = opts.show_spend;
+    // Stamped on every row so the panel can hide one account locally.
+    let account_key = acct.home.clone();
     let mut title = if acct.label.is_empty() && !snap.email.is_empty() {
         snap.email.clone()
     } else {
@@ -702,6 +704,9 @@ fn meters_for(
             "no usage data returned".to_string(),
         ));
     }
+    for meter in meters.iter_mut() {
+        meter.key = Some(account_key.clone());
+    }
     meters
 }
 
@@ -713,7 +718,9 @@ fn problem_meters(acct: &AccountIdentity, problem: &str) -> Vec<UsageMeter> {
         title.push_str(" · ");
         title.push_str(&codex_accounts::plan_display(&acct.plan));
     }
-    vec![UsageMeter::grouped(title, "Login", 0, problem.to_string())]
+    let mut meter = UsageMeter::grouped(title, "Login", 0, problem.to_string());
+    meter.key = Some(acct.home.clone());
+    vec![meter]
 }
 
 /// One tooltip line per account: "~/.codex  stanty.ibg@gmail.com  Plus  5h 84%  7d 13%".

@@ -62,6 +62,8 @@ struct PanelMeter {
     detail: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
 }
 
 pub fn build_json(cfg: &Config) -> String {
@@ -115,6 +117,7 @@ pub fn build_json(cfg: &Config) -> String {
                             percent: m.percent,
                             detail: m.detail.clone(),
                             group: m.group.clone(),
+                            key: m.key.clone(),
                         })
                         .collect();
                     PanelResult {
