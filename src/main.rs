@@ -170,6 +170,17 @@ fn fetch_provider(name: &str, cfg: &config::Config) -> ProviderFetchResult {
     }
 }
 
+/// Badge text: quota left when the panel reads remaining, otherwise quota used.
+/// Severity is always the used side, so the bad-case number is 0% left / 100% used.
+fn badge_percent(max_severity: i32, show_remaining: bool) -> i32 {
+    let severity = max_severity.clamp(0, 100);
+    if show_remaining {
+        100 - severity
+    } else {
+        severity
+    }
+}
+
 /// Minutes until the next cycle: configured interval, doubled while cycles fail.
 fn next_interval_minutes() -> u32 {
     let cfg = config::load();
@@ -207,17 +218,24 @@ fn push_ui_state() {
         (m, summaries.join("\n\n"))
     };
 
-    let icon = icon::usage_icon_bytes(max_crit);
+    let cfg = config::load();
+    // The badge reads the same way as the panel: quota left when the meters show
+    // remaining, otherwise quota used. Colour always means the same thing —
+    // under 10% left is red, under 30% is amber.
+    let show_remaining = cfg.codex.show_remaining;
+    let badge = badge_percent(max_crit, show_remaining);
+    let wording = if show_remaining { "least remaining" } else { "worst used" };
+
+    let icon = icon::usage_icon_bytes(badge);
     ffi::set_status_icon(&icon);
-    ffi::set_status_title(&format!("{}%", max_crit));
+    ffi::set_status_title(&format!("{}%", badge), max_crit);
     let tooltip = if summary.is_empty() {
-        format!("Usage Monitor — worst: {}%", max_crit)
+        format!("Usage Monitor — {}: {}%", wording, badge)
     } else {
-        format!("Usage Monitor — worst: {}%\n\n{}", max_crit, summary)
+        format!("Usage Monitor — {}: {}%\n\n{}", wording, badge, summary)
     };
     ffi::set_status_tooltip(&tooltip);
 
-    let cfg = config::load();
     let state_json = panel_state::build_json(&cfg);
     ffi::update_panel_state(&state_json);
 }
@@ -438,6 +456,19 @@ unsafe fn cstr_to_string(ptr: *const c_char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn badge_follows_the_panel_direction() {
+        // Nothing left: 0% in remaining mode, 100% in used mode.
+        assert_eq!(badge_percent(100, true), 0);
+        assert_eq!(badge_percent(100, false), 100);
+        // 85% used == 15% left.
+        assert_eq!(badge_percent(85, true), 15);
+        assert_eq!(badge_percent(85, false), 85);
+        // Out-of-range providers must not produce nonsense.
+        assert_eq!(badge_percent(130, true), 0);
+        assert_eq!(badge_percent(-5, false), 0);
+    }
 
     #[test]
     fn parses_account_list_payload() {

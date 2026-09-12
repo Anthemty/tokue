@@ -641,29 +641,36 @@ fn meters_for(
     let suffix = if stale { " (stale)" } else { "" };
     let mut meters = Vec::new();
     if let Some(primary) = &snap.primary {
-        meters.push(UsageMeter::grouped(
+        let mut meter = UsageMeter::grouped(
             title.clone(),
             window_label(primary.window_secs, "Primary", show_remaining),
             display_percent(primary.used_percent, show_remaining),
             format!("{}{}", reset_detail(primary), suffix),
-        ));
+        );
+        meter.severity = Some(primary.used_percent.clamp(0, 100));
+        meters.push(meter);
     }
     if let Some(secondary) = &snap.secondary {
-        meters.push(UsageMeter::grouped(
+        let mut meter = UsageMeter::grouped(
             title.clone(),
             window_label(secondary.window_secs, "Secondary", show_remaining),
             display_percent(secondary.used_percent, show_remaining),
             format!("{}{}", reset_detail(secondary), suffix),
-        ));
+        );
+        meter.severity = Some(secondary.used_percent.clamp(0, 100));
+        meters.push(meter);
     }
     if let Some(consumed) = opts.today_consumed.filter(|_| opts.show_today && !stale) {
         let rounded = consumed.round() as i64;
-        meters.push(UsageMeter::grouped(
+        let shown = rounded.clamp(0, 100) as i32;
+        let mut meter = UsageMeter::grouped(
             title.clone(),
             "Today".to_string(),
-            rounded.clamp(0, 100) as i32,
+            shown,
             format!("{}% used today", rounded.max(0)),
-        ));
+        );
+        meter.severity = Some(shown);
+        meters.push(meter);
     }
     if let Some(spend) = &snap.spend {
         if show_spend && spend.used_percent > 0 {
@@ -706,6 +713,10 @@ fn meters_for(
     }
     for meter in meters.iter_mut() {
         meter.key = Some(account_key.clone());
+        // Credits / reset credits are not quota: no amber/red.
+        if meter.label == "Credits" || meter.label == "Reset credits" {
+            meter.severity = None;
+        }
     }
     meters
 }
@@ -1026,6 +1037,36 @@ mod tests {
         // Out-of-range backends must not produce negative bars.
         assert_eq!(display_percent(130, true), 0);
         assert_eq!(display_percent(-5, true), 100);
+    }
+
+    #[test]
+    fn window_meters_carry_used_severity_in_remaining_mode() {
+        let acct = AccountIdentity {
+            home: "/tmp/.codex".to_string(),
+            home_display: "~/.codex".to_string(),
+            label: String::new(),
+            email: "a@example.com".to_string(),
+            plan: "plus".to_string(),
+            account_id: "a".to_string(),
+            access_token: String::new(),
+            exp: None,
+            duplicate_of: None,
+            problem: None,
+        };
+        let snap = Snapshot {
+            email: "a@example.com".to_string(),
+            primary: Some(Window { used_percent: 92, window_secs: Some(18000), ..Default::default() }),
+            ..Default::default()
+        };
+        let meters = meters_for(
+            &acct,
+            &snap,
+            false,
+            MeterOptions { show_remaining: true, ..Default::default() },
+        );
+        assert_eq!(meters[0].percent, 8, "displays what is left");
+        assert_eq!(meters[0].severity, Some(92), "severity stays on the used side");
+        assert!(meters[0].label.ends_with("left"));
     }
 
     #[test]

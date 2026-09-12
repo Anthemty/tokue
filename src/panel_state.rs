@@ -64,6 +64,8 @@ struct PanelMeter {
     group: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    severity: Option<i32>,
 }
 
 pub fn build_json(cfg: &Config) -> String {
@@ -118,6 +120,7 @@ pub fn build_json(cfg: &Config) -> String {
                             detail: m.detail.clone(),
                             group: m.group.clone(),
                             key: m.key.clone(),
+                            severity: m.severity,
                         })
                         .collect();
                     PanelResult {

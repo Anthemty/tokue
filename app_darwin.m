@@ -548,6 +548,56 @@ static const CGFloat kMinFontSize = 9.0;
   return card;
 }
 
+/// Thin rounded meter bar. NSProgressIndicator cannot be tinted, so the fill is
+/// a plain layer whose width tracks the percentage.
+- (NSView *)barViewForPercent:(double)percent tint:(NSColor *)tint {
+  NSView *track = [[NSView alloc] initWithFrame:NSZeroRect];
+  track.wantsLayer = YES;
+  track.layer.cornerRadius = 2.5;
+  track.layer.backgroundColor = [[NSColor labelColor] colorWithAlphaComponent:0.14].CGColor;
+
+  NSView *fill = [[NSView alloc] initWithFrame:NSZeroRect];
+  fill.wantsLayer = YES;
+  fill.layer.cornerRadius = 2.5;
+  fill.layer.backgroundColor = (tint ?: [NSColor secondaryLabelColor]).CGColor;
+  fill.translatesAutoresizingMaskIntoConstraints = NO;
+  [track addSubview:fill];
+  [NSLayoutConstraint activateConstraints:@[
+    [fill.leadingAnchor constraintEqualToAnchor:track.leadingAnchor],
+    [fill.topAnchor constraintEqualToAnchor:track.topAnchor],
+    [fill.bottomAnchor constraintEqualToAnchor:track.bottomAnchor],
+  ]];
+  if (percent > 0.5) {
+    NSLayoutConstraint *width = [NSLayoutConstraint constraintWithItem:fill
+                                                            attribute:NSLayoutAttributeWidth
+                                                            relatedBy:NSLayoutRelationEqual
+                                                               toItem:track
+                                                           attribute:NSLayoutAttributeWidth
+                                                          multiplier:MIN(1.0, MAX(0.02, percent / 100.0))
+                                                             constant:0];
+    width.active = YES;
+  }
+  return track;
+}
+
+/// Amber when less than 30% of a quota is left (used > 70), red under 10%
+/// (used > 90). Rows that are not quota (credits, reset credits) have no
+/// severity and stay neutral.
+- (NSColor *)severityColor:(NSDictionary *)meter {
+  NSNumber *severity = meter[@"severity"];
+  if (![severity isKindOfClass:[NSNumber class]]) {
+    return nil;
+  }
+  int used = severity.intValue;
+  if (used > 90) {
+    return [NSColor systemRedColor];
+  }
+  if (used > 70) {
+    return [NSColor systemOrangeColor];
+  }
+  return nil;
+}
+
 /// Compact meter for use inside a card: one text line over a thin bar.
 - (NSView *)compactMeterRow:(NSDictionary *)meter {
   NSView *row = [[NSView alloc] initWithFrame:NSZeroRect];
@@ -557,27 +607,24 @@ static const CGFloat kMinFontSize = 9.0;
   NSString *detailText = meter[@"detail"] ?: @"";
   double percent = MAX(0, MIN(100, percentNumber.doubleValue));
 
+  NSColor *tint = [self severityColor:meter];
   NSTextField *label = [self label:[NSString stringWithFormat:@"%@  %.0f%%", labelText, percent]
-                              size:11 weight:NSFontWeightSemibold color:[NSColor labelColor]];
+                              size:11 weight:NSFontWeightSemibold
+                             color:(tint ?: [NSColor labelColor])];
   [label setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
   NSTextField *detail =
       [self label:detailText size:10 weight:NSFontWeightRegular color:[NSColor secondaryLabelColor]];
   [detail setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
-  NSProgressIndicator *progress = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
-  progress.indeterminate = NO;
-  progress.minValue = 0;
-  progress.maxValue = 100;
-  progress.doubleValue = percent;
-  progress.controlSize = NSControlSizeSmall;
+  NSView *bar = [self barViewForPercent:percent tint:tint];
 
   label.translatesAutoresizingMaskIntoConstraints = NO;
   detail.translatesAutoresizingMaskIntoConstraints = NO;
-  progress.translatesAutoresizingMaskIntoConstraints = NO;
+  bar.translatesAutoresizingMaskIntoConstraints = NO;
   [row addSubview:label];
   [row addSubview:detail];
-  [row addSubview:progress];
+  [row addSubview:bar];
 
   [NSLayoutConstraint activateConstraints:@[
     [label.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
@@ -585,10 +632,10 @@ static const CGFloat kMinFontSize = 9.0;
     [detail.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
     [detail.firstBaselineAnchor constraintEqualToAnchor:label.firstBaselineAnchor],
     [detail.leadingAnchor constraintGreaterThanOrEqualToAnchor:label.trailingAnchor constant:6],
-    [progress.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
-    [progress.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
-    [progress.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
-    [progress.heightAnchor constraintEqualToConstant:5],
+    [bar.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+    [bar.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+    [bar.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
+    [bar.heightAnchor constraintEqualToConstant:5],
   ]];
   return row;
 }
@@ -638,24 +685,21 @@ static const CGFloat kMinFontSize = 9.0;
   NSString *detailText = meter[@"detail"] ?: @"";
   double percent = MAX(0, MIN(100, percentNumber.doubleValue));
 
+  NSColor *tint = [self severityColor:meter];
   NSTextField *label = [self label:[NSString stringWithFormat:@"%@  %.0f%%", labelText, percent]
-                              size:12 weight:NSFontWeightSemibold color:[NSColor labelColor]];
+                              size:12 weight:NSFontWeightSemibold
+                             color:(tint ?: [NSColor labelColor])];
   NSTextField *detail = [self label:detailText size:11 weight:NSFontWeightRegular color:[NSColor secondaryLabelColor]];
   [detail setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
-  NSProgressIndicator *progress = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
-  progress.indeterminate = NO;
-  progress.minValue = 0;
-  progress.maxValue = 100;
-  progress.doubleValue = percent;
-  progress.controlSize = NSControlSizeSmall;
+  NSView *bar = [self barViewForPercent:percent tint:tint];
 
   label.translatesAutoresizingMaskIntoConstraints = NO;
   detail.translatesAutoresizingMaskIntoConstraints = NO;
-  progress.translatesAutoresizingMaskIntoConstraints = NO;
+  bar.translatesAutoresizingMaskIntoConstraints = NO;
   [row addSubview:label];
   [row addSubview:detail];
-  [row addSubview:progress];
+  [row addSubview:bar];
 
   [NSLayoutConstraint activateConstraints:@[
     [label.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
@@ -663,10 +707,10 @@ static const CGFloat kMinFontSize = 9.0;
     [detail.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
     [detail.centerYAnchor constraintEqualToAnchor:label.centerYAnchor],
     [detail.leadingAnchor constraintGreaterThanOrEqualToAnchor:label.trailingAnchor constant:8],
-    [progress.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
-    [progress.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
-    [progress.topAnchor constraintEqualToAnchor:label.bottomAnchor constant:7],
-    [progress.heightAnchor constraintEqualToConstant:8],
+    [bar.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+    [bar.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+    [bar.topAnchor constraintEqualToAnchor:label.bottomAnchor constant:7],
+    [bar.heightAnchor constraintEqualToConstant:8],
   ]];
   return row;
 }
@@ -1121,8 +1165,10 @@ static const CGFloat kMinFontSize = 9.0;
   });
 }
 
-/// Short numeric badge next to the icon; red/amber once an account runs hot.
-- (void)setStatusTitleText:(NSString *)title {
+/// Short numeric badge next to the icon. `severity` is always measured as used
+/// (0-100), so the colour means the same thing whether the badge shows quota
+/// used or quota left: under 10% left is red, under 30% is amber.
+- (void)setStatusTitleText:(NSString *)title severity:(int)severity {
   dispatch_async(dispatch_get_main_queue(), ^{
     NSStatusBarButton *button = self.statusItem.button;
     // Debug aid: OCG_STATUS_TITLE forces a fixed badge so the item is easy to
@@ -1130,14 +1176,13 @@ static const CGFloat kMinFontSize = 9.0;
     const char *forced = getenv("OCG_STATUS_TITLE");
     NSString *text = forced != NULL ? [NSString stringWithUTF8String:forced] : (title ?: @"");
     button.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightMedium];
-    int percent = text.intValue;
     // Colour via an attributed title, never contentTintColor: on macOS 26 the
     // latter makes the whole status item stop drawing (which used to hide the
     // badge exactly when usage went critical).
     NSColor *tint = nil;
-    if (percent >= 80) {
+    if (severity > 90) {
       tint = [NSColor systemRedColor];
-    } else if (percent >= 50) {
+    } else if (severity > 70) {
       tint = [NSColor systemOrangeColor];
     }
     NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
@@ -1228,9 +1273,10 @@ void setStatusIcon(const void *bytes, size_t length) {
   }
 }
 
-void setStatusTitle(const char *title) {
+void setStatusTitle(const char *title, int severity) {
   @autoreleasepool {
-    [ocgAppDelegate setStatusTitleText:[NSString stringWithUTF8String:title ?: ""]];
+    [ocgAppDelegate setStatusTitleText:[NSString stringWithUTF8String:title ?: ""]
+                              severity:severity];
   }
 }
 

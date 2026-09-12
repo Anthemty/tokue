@@ -36,12 +36,24 @@ pub struct UsageMeter {
     /// UI can hide/show one account without asking the backend.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    /// How close this meter is to its limit, 0-100, always measured as *used*
+    /// even when `percent` shows what is left. Drives the amber/red thresholds:
+    /// remaining < 30% (severity > 70) amber, remaining < 10% (severity > 90) red.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<i32>,
 }
 
 impl UsageMeter {
     /// Meter without a group header (single-account providers).
     pub fn new(label: impl Into<String>, percent: i32, detail: impl Into<String>) -> Self {
-        Self { label: label.into(), percent, detail: detail.into(), group: None, key: None }
+        Self {
+            label: label.into(),
+            percent,
+            detail: detail.into(),
+            group: None,
+            key: None,
+            severity: Some(percent.clamp(0, 100)),
+        }
     }
 
     /// Meter under a group header.
@@ -57,6 +69,7 @@ impl UsageMeter {
             detail: detail.into(),
             group: Some(group.into()),
             key: None,
+            severity: Some(percent.clamp(0, 100)),
         }
     }
 }
