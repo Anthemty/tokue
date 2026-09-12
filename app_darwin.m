@@ -163,19 +163,28 @@ static const CGFloat kMinFontSize = 9.0;
   [self updatePreferredSize];
 }
 
-/// Size the popover to its content, clamped so long lists scroll instead of
-/// growing off-screen.
+/// How tall the popover may grow: everything the screen has below the menu bar,
+/// minus the popover arrow. Scrolling is only a fallback for absurdly long lists.
+- (CGFloat)maxPanelHeight {
+  NSScreen *screen = self.view.window.screen ?: [NSScreen mainScreen];
+  CGFloat available = screen.visibleFrame.size.height - 24.0;
+  return MAX(280.0, available);
+}
+
+/// Size the popover to its content — every account stays visible — and only
+/// scroll when the list would not fit on the screen at all.
 - (void)updatePreferredSize {
   CGFloat contentHeight = self.content.fittingSize.height;
   if (contentHeight <= 0) {
     return;
   }
-  CGFloat scrollHeight = MIN(MAX(contentHeight, 60), 470);
+  CGFloat chrome = 70.0; // header + footer
+  CGFloat scrollHeight = MIN(MAX(contentHeight, 60), [self maxPanelHeight] - chrome);
   if (fabs(self.scrollHeightConstraint.constant - scrollHeight) > 0.5) {
     self.scrollHeightConstraint.constant = scrollHeight;
     [self.view layoutSubtreeIfNeeded];
   }
-  NSSize size = NSMakeSize(260, scrollHeight + 70);
+  NSSize size = NSMakeSize(260, scrollHeight + chrome);
   if (!NSEqualSizes(self.preferredContentSize, size)) {
     self.preferredContentSize = size;
   }
@@ -520,8 +529,13 @@ static const CGFloat kMinFontSize = 9.0;
 - (NSView *)cardViewWithTitle:(NSString *)title key:(NSString *)key {
   NSView *card = [[NSView alloc] initWithFrame:NSZeroRect];
   card.wantsLayer = YES;
-  card.layer.cornerRadius = 6;
-  card.layer.backgroundColor = [[NSColor labelColor] colorWithAlphaComponent:0.05].CGColor;
+  card.layer.cornerRadius = 7;
+  // A raised surface plus a hairline border: with a flat 5% fill the cards and
+  // the popover blurred into one grey field.
+  card.layer.backgroundColor = [[NSColor labelColor] colorWithAlphaComponent:0.10].CGColor;
+  card.layer.borderWidth = 1.0;
+  card.layer.borderColor =
+      [[NSColor labelColor] colorWithAlphaComponent:0.14].CGColor;
 
   NSTextField *titleLabel =
       [self label:title size:11 weight:NSFontWeightSemibold color:[NSColor labelColor]];
@@ -554,11 +568,12 @@ static const CGFloat kMinFontSize = 9.0;
   NSView *track = [[NSView alloc] initWithFrame:NSZeroRect];
   track.wantsLayer = YES;
   track.layer.cornerRadius = 2.5;
-  track.layer.backgroundColor = [[NSColor labelColor] colorWithAlphaComponent:0.14].CGColor;
+  track.layer.backgroundColor = [[NSColor labelColor] colorWithAlphaComponent:0.18].CGColor;
 
   NSView *fill = [[NSView alloc] initWithFrame:NSZeroRect];
   fill.wantsLayer = YES;
   fill.layer.cornerRadius = 2.5;
+  // Inert rows (credits) get a neutral fill; quota rows are always coloured.
   fill.layer.backgroundColor = (tint ?: [NSColor secondaryLabelColor]).CGColor;
   fill.translatesAutoresizingMaskIntoConstraints = NO;
   [track addSubview:fill];
@@ -580,9 +595,13 @@ static const CGFloat kMinFontSize = 9.0;
   return track;
 }
 
-/// Amber when less than 30% of a quota is left (used > 70), red under 10%
-/// (used > 90). Rows that are not quota (credits, reset credits) have no
-/// severity and stay neutral.
+/// The panel reads status by colour, so the healthy state is green rather than
+/// grey — grey is reserved for structure (tracks, separators, secondary text):
+///
+///   green   plenty of quota left
+///   amber   less than 30% left
+///   red     less than 10% left
+///   neutral rows that are not quota (credits, reset credits)
 - (NSColor *)severityColor:(NSDictionary *)meter {
   NSNumber *severity = meter[@"severity"];
   if (![severity isKindOfClass:[NSNumber class]]) {
@@ -595,7 +614,12 @@ static const CGFloat kMinFontSize = 9.0;
   if (used > 70) {
     return [NSColor systemOrangeColor];
   }
-  return nil;
+  return [NSColor systemGreenColor];
+}
+
+/// Structure colour: card surface, borders, inert bars.
+- (NSColor *)surfaceColor {
+  return [[NSColor labelColor] colorWithAlphaComponent:0.10];
 }
 
 /// Compact meter for use inside a card: one text line over a thin bar.
@@ -1179,7 +1203,7 @@ static const CGFloat kMinFontSize = 9.0;
     // Colour via an attributed title, never contentTintColor: on macOS 26 the
     // latter makes the whole status item stop drawing (which used to hide the
     // badge exactly when usage went critical).
-    NSColor *tint = nil;
+    NSColor *tint = [NSColor systemGreenColor];
     if (severity > 90) {
       tint = [NSColor systemRedColor];
     } else if (severity > 70) {
@@ -1239,6 +1263,12 @@ static const CGFloat kMinFontSize = 9.0;
   self.controller.preferredContentSize = NSMakeSize(260, 546);
   [self.controller.view setFrameSize:NSMakeSize(260, 546)];
   [self.controller renderAll];
+  [self.controller.view layoutSubtreeIfNeeded];
+  // Follow whatever height the content asked for (a tall account list would
+  // otherwise be captured clipped).
+  NSSize wanted = self.controller.preferredContentSize;
+  [offscreen setContentSize:wanted];
+  [self.controller.view setFrameSize:wanted];
   [self.controller.view layoutSubtreeIfNeeded];
 
   NSRect bounds = self.controller.view.bounds;

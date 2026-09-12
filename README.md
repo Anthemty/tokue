@@ -51,6 +51,7 @@ Shows subscription usage for **every ChatGPT login on the machine**, not an API-
 - **Credentials are read-only.** ocg never writes `auth.json`. When an access token is close to expiry it asks the `codex` CLI (`codex app-server` → `account/rateLimits/read`) instead of refreshing on its own, so the CLI stays the single owner of token rotation.
 - **Transports**: HTTPS via reqwest, falling back to the system `curl` (native TLS) if the request is refused, then to the CLI. Failures are per account and isolated; the last good snapshot is cached in `~/.config/ocg/cache/codex.json` and shown as `cached`.
 - **Two homes, one account**: if several homes hold the same ChatGPT account, each card still names its own home and the title carries `⧉` (they share one quota).
+- **Colour system**: quota rows read status by colour — **green** while there is room, **amber** under 30% left, **red** under 10%; grey is reserved for structure (bar tracks, separators, reset times) and for rows that are not quota (credits). Each account sits on a raised, bordered card, and the popover grows to fit every account instead of scrolling.
 - **Settings**: rename an account inline, enable/disable it, switch the meter reading between **Used** and **Remaining** (default: remaining, shown as `5h left 43%`), and toggle the optional **Show spend limit** and **Show today's usage** rows (both off by default).
 - The menu bar badge keeps reporting the worst *used* percentage across all providers, so its colour and the gauge fill always mean "how close to the limit".
 
