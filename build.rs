@@ -14,5 +14,6 @@ fn main() {
         .compile("ocg_ui");
 
     println!("cargo:rustc-link-lib=framework=Cocoa");
+    println!("cargo:rustc-link-lib=framework=QuartzCore");
     println!("cargo:rerun-if-changed=app_darwin.m");
 }

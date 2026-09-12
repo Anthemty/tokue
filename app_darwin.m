@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#import <QuartzCore/QuartzCore.h>
 
 // C callbacks (implemented in Rust via #[no_mangle]).
 extern void goOnReady(void);
@@ -645,12 +646,32 @@ static const CGFloat kMinFontSize = 9.0;
 }
 
 /// Thin rounded meter bar. NSProgressIndicator cannot be tinted, so the fill is
-/// a plain layer whose width tracks the percentage.
-- (NSView *)barViewForPercent:(double)percent tint:(NSColor *)tint {
+/// a plain layer whose width tracks the percentage. An exhausted quota (0% left)
+/// tints the empty track red and lets it breathe slowly — the one case that gets
+/// a little motion, so "almost empty" and "gone" never look the same.
+- (NSView *)barViewForMeter:(NSDictionary *)meter percent:(double)percent {
+  NSColor *tint = [self severityColor:meter];
+  BOOL exhausted = NO;
+  NSNumber *severity = meter[@"severity"];
+  if ([severity isKindOfClass:[NSNumber class]] && severity.intValue >= 100) {
+    exhausted = YES;
+  }
   NSView *track = [[NSView alloc] initWithFrame:NSZeroRect];
   track.wantsLayer = YES;
   track.layer.cornerRadius = 2.5;
   track.layer.backgroundColor = [[NSColor labelColor] colorWithAlphaComponent:0.18].CGColor;
+  if (exhausted) {
+    track.layer.backgroundColor = [OCGCritColor() colorWithAlphaComponent:0.28].CGColor;
+    CABasicAnimation *breathe = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    breathe.fromValue = @0.35;
+    breathe.toValue = @1.0;
+    breathe.duration = 1.8;
+    breathe.autoreverses = YES;
+    breathe.repeatCount = HUGE_VALF;
+    breathe.timingFunction =
+        [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    [track.layer addAnimation:breathe forKey:@"ocg-breathe"];
+  }
 
   NSView *fill = [[NSView alloc] initWithFrame:NSZeroRect];
   fill.wantsLayer = YES;
@@ -716,7 +737,6 @@ static const CGFloat kMinFontSize = 9.0;
   NSString *detailText = meter[@"detail"] ?: @"";
   double percent = MAX(0, MIN(100, percentNumber.doubleValue));
 
-  NSColor *tint = [self severityColor:meter];
   NSTextField *label = [self label:[NSString stringWithFormat:@"%@  %.0f%%", labelText, percent]
                               size:11 weight:NSFontWeightSemibold
                              color:([self severityTextColor:meter] ?: [NSColor labelColor])];
@@ -726,7 +746,7 @@ static const CGFloat kMinFontSize = 9.0;
       [self label:detailText size:10 weight:NSFontWeightRegular color:[NSColor secondaryLabelColor]];
   [detail setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
-  NSView *bar = [self barViewForPercent:percent tint:tint];
+  NSView *bar = [self barViewForMeter:meter percent:percent];
 
   label.translatesAutoresizingMaskIntoConstraints = NO;
   detail.translatesAutoresizingMaskIntoConstraints = NO;
@@ -794,14 +814,13 @@ static const CGFloat kMinFontSize = 9.0;
   NSString *detailText = meter[@"detail"] ?: @"";
   double percent = MAX(0, MIN(100, percentNumber.doubleValue));
 
-  NSColor *tint = [self severityColor:meter];
   NSTextField *label = [self label:[NSString stringWithFormat:@"%@  %.0f%%", labelText, percent]
                               size:12 weight:NSFontWeightSemibold
                              color:([self severityTextColor:meter] ?: [NSColor labelColor])];
   NSTextField *detail = [self label:detailText size:11 weight:NSFontWeightRegular color:[NSColor secondaryLabelColor]];
   [detail setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                    forOrientation:NSLayoutConstraintOrientationHorizontal];
-  NSView *bar = [self barViewForPercent:percent tint:tint];
+  NSView *bar = [self barViewForMeter:meter percent:percent];
 
   label.translatesAutoresizingMaskIntoConstraints = NO;
   detail.translatesAutoresizingMaskIntoConstraints = NO;
