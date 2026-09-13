@@ -81,6 +81,8 @@ static NSColor *OCGStatusColor(int used) {
 // points smaller than its nominal size, so the whole pane scales from here.
 static const CGFloat kPanelFontDelta = -2.0;
 static const CGFloat kMinFontSize = 9.0;
+/// 弹窗默认最小总高（含头部与底栏）：内容再少也不缩成一小条。
+static const CGFloat kMinPanelHeight = 300.0;
 
 @interface UsagePanelController : NSViewController <NSTextFieldDelegate>
 @property(strong) NSView *sidebar;
@@ -133,7 +135,7 @@ static const CGFloat kMinFontSize = 9.0;
 }
 
 - (void)loadView {
-  NSRect frame = NSMakeRect(0, 0, 272, 360);
+  NSRect frame = NSMakeRect(0, 0, 272, kMinPanelHeight);
   self.view = [[NSView alloc] initWithFrame:frame];
   // Single unified background across the whole popover — no sidebar tint.
   self.view.wantsLayer = YES;
@@ -241,7 +243,8 @@ static const CGFloat kMinFontSize = 9.0;
     return;
   }
   CGFloat chrome = 70.0; // header + footer
-  CGFloat scrollHeight = MIN(MAX(contentHeight, 60), [self maxPanelHeight] - chrome);
+  CGFloat scrollHeight = MIN(MAX(contentHeight, kMinPanelHeight - chrome),
+                             [self maxPanelHeight] - chrome);
   if (fabs(self.scrollHeightConstraint.constant - scrollHeight) > 0.5) {
     self.scrollHeightConstraint.constant = scrollHeight;
     [self.view layoutSubtreeIfNeeded];
