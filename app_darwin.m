@@ -110,9 +110,9 @@ static const CGFloat kMinPanelHeight = 300.0;
 /// Providers hidden locally; Save & Refresh persists the choice.
 @property(strong) NSMutableSet<NSString *> *hiddenProviders;
 /// Optional Codex meter toggles (default off).
-@property(strong) NSButton *showSpendToggle;
-@property(strong) NSButton *showTodayToggle;
-@property(strong) NSButton *showResetCreditsToggle;
+@property(strong) NSSwitch *showSpendToggle;
+@property(strong) NSSwitch *showTodayToggle;
+@property(strong) NSSwitch *showResetCreditsToggle;
 /// Codex meter reading: segment 0 = used, 1 = remaining (default).
 @property(strong) NSSegmentedControl *usedRemainingControl;
 - (void)renderAll;
@@ -867,6 +867,8 @@ static const CGFloat kMinPanelHeight = 300.0;
 
 // ---------- settings view ----------
 
+// ---------- settings view ----------
+
 - (void)renderSettings {
   [self clearHolder:self.headerHolder];
   [self clearHolder:self.footerHolder];
@@ -886,51 +888,135 @@ static const CGFloat kMinPanelHeight = 300.0;
   [self pinChrome:[self makeFooterRow] inHolder:self.footerHolder];
 
   NSView *previous = nil;
-  [self renderProvidersSectionInto:&previous];
+
+  // -- Providers：每家一个开关 --
+  [self renderSectionHeader:@"Providers" into:&previous];
+  for (NSDictionary *provider in self.state[@"providers"] ?: @[]) {
+    NSString *providerID = provider[@"id"] ?: @"";
+    BOOL shown = [provider[@"enabled"] boolValue] &&
+                 ![self.hiddenProviders containsObject:providerID];
+
+    NSView *row = [[NSView alloc] initWithFrame:NSZeroRect];
+
+    NSImageView *icon = [[NSImageView alloc] initWithFrame:NSZeroRect];
+    icon.image = [self logoImageForProvider:providerID];
+    icon.translatesAutoresizingMaskIntoConstraints = NO;
+    [row addSubview:icon];
+
+    NSTextField *name =
+        [self label:provider[@"label"] ?: providerID size:11 weight:NSFontWeightMedium
+               color:[NSColor labelColor]];
+    name.translatesAutoresizingMaskIntoConstraints = NO;
+    [row addSubview:name];
+
+    NSSwitch *toggle = [[NSSwitch alloc] initWithFrame:NSZeroRect];
+    toggle.controlSize = NSControlSizeMini;
+    toggle.state = shown ? NSControlStateValueOn : NSControlStateValueOff;
+    toggle.identifier = providerID;
+    toggle.target = self;
+    toggle.action = @selector(providerToggled:);
+    toggle.translatesAutoresizingMaskIntoConstraints = NO;
+    [row addSubview:toggle];
+
+    [NSLayoutConstraint activateConstraints:@[
+      [icon.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+      [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+      [icon.widthAnchor constraintEqualToConstant:14],
+      [icon.heightAnchor constraintEqualToConstant:14],
+      [name.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:6],
+      [name.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+      [toggle.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+      [toggle.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+    ]];
+
+    [self addRow:row height:24 previous:&previous topGap:2];
+    [self.providerCheckboxRows addObject:@{@"id" : providerID, @"switch" : toggle}];
+  }
+
+  // -- ChatGPT 账户（仅 Codex）--
   if ([active isEqualToString:@"codex"]) {
-    [self renderCodexAccountsInto:&previous];
-    // Off by default: the workspace spend cap is 0 credits on most plans and
-    // only adds a permanently-red row.
-    NSButton *showSpend = [NSButton checkboxWithTitle:@"Show spend limit"
-                                               target:self
-                                               action:@selector(settingsEdited:)];
-    showSpend.state = [self.state[@"codex_show_spend"] boolValue] ? NSControlStateValueOn
-                                                                  : NSControlStateValueOff;
-    showSpend.controlSize = NSControlSizeMini;
-    showSpend.font = [NSFont systemFontOfSize:MAX(kMinFontSize, 11 + kPanelFontDelta)];
-    showSpend.toolTip = @"Show each workspace's spend-control meter";
-    [self addRow:showSpend height:20 previous:&previous topGap:10];
-    self.showSpendToggle = showSpend;
+    [self renderSectionHeader:@"ChatGPT accounts"
+           trailingButtonTitle:@"Rescan"
+                        action:@selector(rescanClicked:)
+                          into:&previous];
+    NSArray *accounts = self.state[@"codex_accounts"] ?: @[];
+    if (accounts.count == 0) {
+      NSTextField *empty = [self label:@"No ~/.codex* logins found"
+                                  size:10 weight:NSFontWeightRegular
+                                 color:[NSColor secondaryLabelColor]];
+      [self addRow:empty height:16 previous:&previous topGap:6];
+    }
+    for (NSDictionary *account in accounts) {
+      NSString *home = account[@"home"] ?: @"";
+      BOOL shown = [account[@"enabled"] boolValue] &&
+                   ![self.hiddenHomes containsObject:home];
 
-    // "Today" is computed from the SQLite history, so it is opt-in like spend.
-    NSButton *showToday = [NSButton checkboxWithTitle:@"Show today's usage"
-                                               target:self
-                                               action:@selector(settingsEdited:)];
-    showToday.state = [self.state[@"codex_show_today"] boolValue] ? NSControlStateValueOn
-                                                                  : NSControlStateValueOff;
-    showToday.controlSize = NSControlSizeMini;
-    showToday.font = [NSFont systemFontOfSize:MAX(kMinFontSize, 11 + kPanelFontDelta)];
-    showToday.toolTip = @"Add a per-account row with quota burned since midnight";
-    [self addRow:showToday height:20 previous:&previous topGap:6];
-    self.showTodayToggle = showToday;
+      NSView *row = [[NSView alloc] initWithFrame:NSZeroRect];
 
-    NSButton *showResetCredits =
-        [NSButton checkboxWithTitle:@"Show reset credits"
-                             target:self
-                             action:@selector(settingsEdited:)];
-    showResetCredits.state = [self.state[@"codex_show_reset_credits"] boolValue]
-                                 ? NSControlStateValueOn
-                                 : NSControlStateValueOff;
-    showResetCredits.controlSize = NSControlSizeMini;
-    showResetCredits.font = [NSFont systemFontOfSize:MAX(kMinFontSize, 11 + kPanelFontDelta)];
-    showResetCredits.toolTip = @"Add a row for the free window resets a plan grants";
-    [self addRow:showResetCredits height:20 previous:&previous topGap:6];
-    self.showResetCreditsToggle = showResetCredits;
+      NSSwitch *toggle = [[NSSwitch alloc] initWithFrame:NSZeroRect];
+      toggle.controlSize = NSControlSizeMini;
+      toggle.state = shown ? NSControlStateValueOn : NSControlStateValueOff;
+      toggle.toolTip = @"Show this account in the usage panel";
+      toggle.translatesAutoresizingMaskIntoConstraints = NO;
+      [row addSubview:toggle];
 
-    // Read the window meters as quota used or quota left.
+      NSTextField *nameField = [[NSTextField alloc] initWithFrame:NSZeroRect];
+      nameField.stringValue = account[@"label"] ?: @"";
+      nameField.placeholderString = account[@"email"] ?: @"name";
+      nameField.controlSize = NSControlSizeSmall;
+      nameField.font = [NSFont systemFontOfSize:MAX(kMinFontSize, 11 + kPanelFontDelta)];
+      nameField.bordered = NO;
+      nameField.bezeled = NO;
+      nameField.drawsBackground = NO;
+      nameField.focusRingType = NSFocusRingTypeNone;
+      nameField.delegate = self;
+      nameField.translatesAutoresizingMaskIntoConstraints = NO;
+      [row addSubview:nameField];
+
+      NSMutableArray *parts = [NSMutableArray array];
+      [parts addObject:account[@"home_display"] ?: @""];
+      if ([account[@"plan"] length] > 0) {
+        [parts addObject:account[@"plan"]];
+      }
+      NSString *subtitle = [parts componentsJoinedByString:@" · "];
+      if ([account[@"duplicate_of"] length] > 0) {
+        subtitle = [subtitle stringByAppendingFormat:@"  (same as %@)", account[@"duplicate_of"]];
+      }
+      NSString *problem = account[@"error"];
+      BOOL hasProblem = [problem isKindOfClass:[NSString class]] && problem.length > 0;
+      NSTextField *subtitleField =
+          [self label:(hasProblem ? problem : subtitle)
+                 size:9 weight:NSFontWeightRegular
+                color:(hasProblem ? [NSColor systemOrangeColor] : [NSColor tertiaryLabelColor])];
+      subtitleField.toolTip = subtitle;
+      subtitleField.translatesAutoresizingMaskIntoConstraints = NO;
+      [row addSubview:subtitleField];
+
+      [NSLayoutConstraint activateConstraints:@[
+        [toggle.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+        [toggle.topAnchor constraintEqualToAnchor:row.topAnchor constant:1],
+        [nameField.leadingAnchor constraintEqualToAnchor:toggle.trailingAnchor constant:6],
+        [nameField.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+        [nameField.topAnchor constraintEqualToAnchor:row.topAnchor],
+        [subtitleField.leadingAnchor constraintEqualToAnchor:nameField.leadingAnchor],
+        [subtitleField.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+        [subtitleField.topAnchor constraintEqualToAnchor:nameField.bottomAnchor constant:2],
+      ]];
+
+      [self addRow:row height:40 previous:&previous topGap:6];
+      [self.codexAccountRows addObject:@{
+        @"home" : home,
+        @"switch" : toggle,
+        @"labelField" : nameField,
+      }];
+    }
+
+    // -- Display：读数方向与可选行 --
+    [self renderSectionHeader:@"Display" into:&previous];
+
     NSView *modeRow = [[NSView alloc] initWithFrame:NSZeroRect];
     NSTextField *modeLabel =
-        [self label:@"Meters" size:11 weight:NSFontWeightMedium color:[NSColor labelColor]];
+        [self label:@"Meters" size:11 weight:NSFontWeightRegular color:[NSColor labelColor]];
     [modeRow addSubview:modeLabel];
     NSSegmentedControl *mode =
         [NSSegmentedControl segmentedControlWithLabels:@[ @"Used", @"Remaining" ]
@@ -947,20 +1033,34 @@ static const CGFloat kMinPanelHeight = 300.0;
       [modeLabel.centerYAnchor constraintEqualToAnchor:modeRow.centerYAnchor],
       [mode.trailingAnchor constraintEqualToAnchor:modeRow.trailingAnchor],
       [mode.centerYAnchor constraintEqualToAnchor:modeRow.centerYAnchor],
-      [mode.leadingAnchor constraintGreaterThanOrEqualToAnchor:modeLabel.trailingAnchor constant:8],
     ]];
-    [self addRow:modeRow height:22 previous:&previous topGap:8];
+    [self addRow:modeRow height:22 previous:&previous topGap:4];
     self.usedRemainingControl = mode;
+
+    self.showSpendToggle =
+        [self displaySwitchRow:@"Show spend limit"
+                          key:@"codex_show_spend"
+                         tip:@"Show each workspace's spend-control meter"
+                    previous:&previous];
+    self.showTodayToggle =
+        [self displaySwitchRow:@"Show today's usage"
+                           key:@"codex_show_today"
+                          tip:@"Add a per-account row with quota burned since midnight"
+                     previous:&previous];
+    self.showResetCreditsToggle =
+        [self displaySwitchRow:@"Show reset credits"
+                           key:@"codex_show_reset_credits"
+                          tip:@"Add a row for the free window resets a plan grants"
+                     previous:&previous];
   } else {
     NSDictionary *creds = self.state[@"credentials"][active] ?: @{};
-    NSArray *fields = [self fieldsForProvider:active];
-    for (NSDictionary *fieldDef in fields) {
+    for (NSDictionary *fieldDef in [self fieldsForProvider:active]) {
       NSString *field = fieldDef[@"field"];
       NSString *labelText = fieldDef[@"label"];
       BOOL secure = [fieldDef[@"secure"] boolValue];
 
       NSTextField *fieldLabel =
-          [self label:labelText size:11 weight:NSFontWeightMedium color:[NSColor labelColor]];
+          [self label:labelText size:11 weight:NSFontWeightRegular color:[NSColor labelColor]];
       [self addRow:fieldLabel height:14 previous:&previous topGap:12];
 
       NSTextField *input = secure ? [[NSSecureTextField alloc] initWithFrame:NSZeroRect]
@@ -968,29 +1068,19 @@ static const CGFloat kMinPanelHeight = 300.0;
       input.stringValue = creds[field] ?: @"";
       input.placeholderString = labelText;
       input.delegate = self;
-      input.controlSize = NSControlSizeMini;
+      input.controlSize = NSControlSizeSmall;
       input.font = [NSFont systemFontOfSize:MAX(kMinFontSize, 11 + kPanelFontDelta)];
       [self addRow:input height:22 previous:&previous topGap:4];
       self.fieldInputs[field] = input;
     }
   }
 
-  // Codex accounts come from disk, so the extra button re-scans ~/.codex*.
-  NSView *lastButton = nil;
-  if ([active isEqualToString:@"codex"]) {
-    NSButton *rescan = [NSButton buttonWithTitle:@"Rescan ~/.codex*"
-                                          target:self
-                                          action:@selector(rescanClicked:)];
-    rescan.controlSize = NSControlSizeMini;
-    [self addRow:rescan height:24 previous:&previous topGap:14];
-    lastButton = rescan;
-  }
-
-  NSButton *saveButton = [NSButton buttonWithTitle:@"Save & Refresh"
-                                             target:self
-                                            action:@selector(saveClicked:)];
-  saveButton.controlSize = NSControlSizeMini;
-  [self addRow:saveButton height:24 previous:&previous topGap:(lastButton == nil ? 14 : 8)];
+  // 保存：全宽、面板唯一的主按钮
+  NSButton *saveButton =
+      [NSButton buttonWithTitle:@"Save & Refresh" target:self action:@selector(saveClicked:)];
+  saveButton.controlSize = NSControlSizeSmall;
+  saveButton.translatesAutoresizingMaskIntoConstraints = NO;
+  [self addRow:saveButton height:26 previous:&previous topGap:16];
 
   if (previous != nil) {
     [NSLayoutConstraint activateConstraints:@[
@@ -999,72 +1089,126 @@ static const CGFloat kMinPanelHeight = 300.0;
   }
 }
 
-/// Enable/disable switch for every provider, shown at the top of the settings
-/// pane no matter which provider is selected.
-- (void)renderProvidersSectionInto:(NSView **)previous {
-  NSTextField *title = [self label:@"Providers" size:11 weight:NSFontWeightMedium
-                              color:[NSColor labelColor]];
-  [self addRow:title height:13 previous:previous topGap:4];
+// -- 小节标题：小号大写灰字，可选行尾按钮 --
+- (void)renderSectionHeader:(NSString *)title into:(NSView **)previous {
+  [self renderSectionHeader:title trailingButtonTitle:nil action:nil into:previous];
+}
 
+- (void)renderSectionHeader:(NSString *)title
+         trailingButtonTitle:(NSString *)buttonTitle
+                      action:(SEL)action
+                        into:(NSView **)previous {
+  NSTextField *label = [self label:title.uppercaseString size:9 weight:NSFontWeightSemibold
+                              color:[NSColor tertiaryLabelColor]];
+  [self addRow:label height:12 previous:previous topGap:14];
+  if (buttonTitle.length > 0) {
+    NSButton *button = [NSButton buttonWithTitle:buttonTitle target:self action:action];
+    button.bordered = NO;
+    button.controlSize = NSControlSizeMini;
+    button.font = [NSFont systemFontOfSize:MAX(kMinFontSize, 10 + kPanelFontDelta)];
+    button.contentTintColor = [NSColor secondaryLabelColor];
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.content addSubview:button];
+    [NSLayoutConstraint activateConstraints:@[
+      [button.trailingAnchor constraintEqualToAnchor:self.content.trailingAnchor constant:-12],
+      [button.firstBaselineAnchor constraintEqualToAnchor:label.firstBaselineAnchor],
+    ]];
+  }
+}
+
+- (NSSwitch *)displaySwitchRow:(NSString *)title
+                           key:(NSString *)stateKey
+                           tip:(NSString *)tip
+                      previous:(NSView **)previous {
+  NSSwitch *toggle = [[NSSwitch alloc] initWithFrame:NSZeroRect];
+  toggle.controlSize = NSControlSizeMini;
+  toggle.state = [self.state[stateKey] boolValue] ? NSControlStateValueOn
+                                                  : NSControlStateValueOff;
+  toggle.target = self;
+  toggle.action = @selector(settingsEdited:);
+  toggle.toolTip = tip;
+  toggle.translatesAutoresizingMaskIntoConstraints = NO;
+
+  NSTextField *label = [self label:title size:11 weight:NSFontWeightRegular
+                              color:[NSColor labelColor]];
+  label.translatesAutoresizingMaskIntoConstraints = NO;
+
+  NSView *row = [[NSView alloc] initWithFrame:NSZeroRect];
+  [row addSubview:label];
+  [row addSubview:toggle];
+  [NSLayoutConstraint activateConstraints:@[
+    [label.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+    [label.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+    [toggle.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+    [toggle.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+  ]];
+  [self addRow:row height:22 previous:previous topGap:4];
+  return toggle;
+}
+
+- (void)renderProviderRowsInto:(NSView **)previous {
   for (NSDictionary *provider in self.state[@"providers"] ?: @[]) {
     NSString *providerID = provider[@"id"] ?: @"";
-    NSButton *toggle = [NSButton checkboxWithTitle:provider[@"label"] ?: @""
-                                            target:self
-                                            action:@selector(providerToggled:)];
-    toggle.identifier = providerID;
     BOOL shown = [provider[@"enabled"] boolValue] &&
                  ![self.hiddenProviders containsObject:providerID];
-    toggle.state = shown ? NSControlStateValueOn : NSControlStateValueOff;
+
+    NSView *row = [[NSView alloc] initWithFrame:NSZeroRect];
+
+    NSImageView *icon = [[NSImageView alloc] initWithFrame:NSZeroRect];
+    icon.image = [self logoImageForProvider:providerID];
+    icon.translatesAutoresizingMaskIntoConstraints = NO;
+    [row addSubview:icon];
+
+    NSTextField *name =
+        [self label:provider[@"label"] ?: providerID size:11 weight:NSFontWeightMedium
+               color:[NSColor labelColor]];
+    name.translatesAutoresizingMaskIntoConstraints = NO;
+    [row addSubview:name];
+
+    NSSwitch *toggle = [[NSSwitch alloc] initWithFrame:NSZeroRect];
     toggle.controlSize = NSControlSizeMini;
-    toggle.font = [NSFont systemFontOfSize:MAX(kMinFontSize, 11 + kPanelFontDelta)];
-    toggle.toolTip = @"Show this provider in the sidebar and panel";
-    [self addRow:toggle height:20 previous:previous topGap:4];
-    [self.providerCheckboxRows addObject:@{@"id" : providerID, @"checkbox" : toggle}];
+    toggle.state = shown ? NSControlStateValueOn : NSControlStateValueOff;
+    toggle.identifier = providerID;
+    toggle.target = self;
+    toggle.action = @selector(providerToggled:);
+    toggle.translatesAutoresizingMaskIntoConstraints = NO;
+    [row addSubview:toggle];
+
+    [NSLayoutConstraint activateConstraints:@[
+      [icon.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+      [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+      [icon.widthAnchor constraintEqualToConstant:14],
+      [icon.heightAnchor constraintEqualToConstant:14],
+      [name.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:6],
+      [name.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+      [toggle.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+      [toggle.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+    ]];
+
+    [self addRow:row height:24 previous:previous topGap:2];
+    [self.providerCheckboxRows addObject:@{@"id" : providerID, @"switch" : toggle}];
   }
 }
 
-/// Tick box on a provider: hide/show it in the sidebar immediately.
-- (void)providerToggled:(NSButton *)sender {
-  NSString *providerID = sender.identifier ?: @"";
-  if (providerID.length == 0) {
-    return;
-  }
-  self.settingsDirty = YES;
-  if (sender.state == NSControlStateValueOn) {
-    [self.hiddenProviders removeObject:providerID];
-  } else {
-    [self.hiddenProviders addObject:providerID];
-  }
-  [self renderAll];
-}
-
-/// Editor for the Codex account list: enable toggle, custom name, and the
-/// identity read from each home's auth.json.
 - (void)renderCodexAccountsInto:(NSView **)previous {
   NSArray *accounts = self.state[@"codex_accounts"] ?: @[];
-
-  NSTextField *hint = [self label:@"ChatGPT logins · read-only"
-                             size:11 weight:NSFontWeightRegular color:[NSColor secondaryLabelColor]];
-  [hint setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
-                                 forOrientation:NSLayoutConstraintOrientationHorizontal];
-  [self addRow:hint height:14 previous:previous topGap:6];
-
   if (accounts.count == 0) {
     NSTextField *empty = [self label:@"No ~/.codex* logins found"
-                               size:12 weight:NSFontWeightRegular color:[NSColor secondaryLabelColor]];
-    [self addRow:empty height:20 previous:previous topGap:10];
+                                size:10 weight:NSFontWeightRegular
+                               color:[NSColor secondaryLabelColor]];
+    [self addRow:empty height:16 previous:previous topGap:8];
     return;
   }
 
   for (NSDictionary *account in accounts) {
+    NSString *home = account[@"home"] ?: @"";
+    BOOL shown = [account[@"enabled"] boolValue] &&
+                 ![self.hiddenHomes containsObject:home];
+
     NSView *row = [[NSView alloc] initWithFrame:NSZeroRect];
 
-    NSButton *toggle = [NSButton checkboxWithTitle:@""
-                                            target:self
-                                            action:@selector(accountToggled:)];
-    NSString *home = account[@"home"] ?: @"";
-    toggle.identifier = home;
-    BOOL shown = [account[@"enabled"] boolValue] && ![self.hiddenHomes containsObject:home];
+    NSSwitch *toggle = [[NSSwitch alloc] initWithFrame:NSZeroRect];
+    toggle.controlSize = NSControlSizeMini;
     toggle.state = shown ? NSControlStateValueOn : NSControlStateValueOff;
     toggle.toolTip = @"Show this account in the usage panel";
     toggle.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1073,15 +1217,16 @@ static const CGFloat kMinPanelHeight = 300.0;
     NSTextField *nameField = [[NSTextField alloc] initWithFrame:NSZeroRect];
     nameField.stringValue = account[@"label"] ?: @"";
     nameField.placeholderString = account[@"email"] ?: @"name";
-    nameField.controlSize = NSControlSizeMini;
-    nameField.delegate = self;
+    nameField.controlSize = NSControlSizeSmall;
     nameField.font = [NSFont systemFontOfSize:MAX(kMinFontSize, 11 + kPanelFontDelta)];
+    nameField.bordered = NO;
+    nameField.bezeled = NO;
+    nameField.drawsBackground = NO;
+    nameField.focusRingType = NSFocusRingTypeNone;
+    nameField.delegate = self;
     nameField.translatesAutoresizingMaskIntoConstraints = NO;
     [row addSubview:nameField];
 
-    // Subtitle: email · Plan · home, or the reason the login is unusable.
-    // Home first: with several homes for one account it is the only thing that
-    // tells the rows apart, and the panel is narrow.
     NSMutableArray *parts = [NSMutableArray array];
     [parts addObject:account[@"home_display"] ?: @""];
     if ([account[@"plan"] length] > 0) {
@@ -1095,34 +1240,87 @@ static const CGFloat kMinPanelHeight = 300.0;
     BOOL hasProblem = [problem isKindOfClass:[NSString class]] && problem.length > 0;
     NSTextField *subtitleField =
         [self label:(hasProblem ? problem : subtitle)
-               size:10 weight:NSFontWeightRegular
-              color:(hasProblem ? [NSColor systemOrangeColor] : [NSColor secondaryLabelColor])];
+               size:9 weight:NSFontWeightRegular
+              color:(hasProblem ? [NSColor systemOrangeColor] : [NSColor tertiaryLabelColor])];
     subtitleField.toolTip = subtitle;
-    [subtitleField setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
-                                            forOrientation:NSLayoutConstraintOrientationHorizontal];
     subtitleField.translatesAutoresizingMaskIntoConstraints = NO;
     [row addSubview:subtitleField];
 
     [NSLayoutConstraint activateConstraints:@[
       [toggle.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
       [toggle.topAnchor constraintEqualToAnchor:row.topAnchor constant:2],
-      [toggle.widthAnchor constraintEqualToConstant:18],
       [nameField.leadingAnchor constraintEqualToAnchor:toggle.trailingAnchor constant:6],
       [nameField.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
-      [nameField.centerYAnchor constraintEqualToAnchor:toggle.centerYAnchor],
       [subtitleField.leadingAnchor constraintEqualToAnchor:nameField.leadingAnchor],
       [subtitleField.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
-      [subtitleField.topAnchor constraintEqualToAnchor:nameField.bottomAnchor constant:3],
+      [subtitleField.topAnchor constraintEqualToAnchor:nameField.bottomAnchor constant:2],
     ]];
 
-    [self addRow:row height:44 previous:previous topGap:8];
+    [self addRow:row height:42 previous:previous topGap:8];
     [self.codexAccountRows addObject:@{
-      @"home" : account[@"home"] ?: @"",
-      @"checkbox" : toggle,
-      @"labelField" : nameField
+      @"home" : home,
+      @"switch" : toggle,
+      @"labelField" : nameField,
     }];
   }
 }
+
+- (void)providerToggled:(NSSwitch *)sender {
+  NSString *providerID = sender.identifier ?: @"";
+  if (providerID.length == 0) {
+    return;
+  }
+  self.settingsDirty = YES;
+  if (sender.state == NSControlStateValueOn) {
+    [self.hiddenProviders removeObject:providerID];
+  } else {
+    [self.hiddenProviders addObject:providerID];
+  }
+  [self renderAll];
+}
+
+- (void)renderCodexDisplayInto:(NSView **)previous {
+  // 读数方向：Used / Remaining
+  NSView *modeRow = [[NSView alloc] initWithFrame:NSZeroRect];
+  NSTextField *modeLabel =
+      [self label:@"Meters" size:11 weight:NSFontWeightRegular color:[NSColor labelColor]];
+  [modeRow addSubview:modeLabel];
+  NSSegmentedControl *mode =
+      [NSSegmentedControl segmentedControlWithLabels:@[ @"Used", @"Remaining" ]
+                                        trackingMode:NSSegmentSwitchTrackingSelectOne
+                                              target:self
+                                              action:@selector(settingsEdited:)];
+  mode.controlSize = NSControlSizeMini;
+  mode.selectedSegment = [self.state[@"codex_show_remaining"] boolValue] ? 1 : 0;
+  mode.toolTip = @"Show quota used or quota left in the panel";
+  mode.translatesAutoresizingMaskIntoConstraints = NO;
+  [modeRow addSubview:mode];
+  [NSLayoutConstraint activateConstraints:@[
+    [modeLabel.leadingAnchor constraintEqualToAnchor:modeRow.leadingAnchor],
+    [modeLabel.centerYAnchor constraintEqualToAnchor:modeRow.centerYAnchor],
+    [mode.trailingAnchor constraintEqualToAnchor:modeRow.trailingAnchor],
+    [mode.centerYAnchor constraintEqualToAnchor:modeRow.centerYAnchor],
+  ]];
+  [self addRow:modeRow height:22 previous:previous topGap:4];
+  self.usedRemainingControl = mode;
+
+  self.showSpendToggle =
+      [self displaySwitchRow:@"Show spend limit"
+                         key:@"codex_show_spend"
+                        tip:@"Show each workspace's spend-control meter"
+                   previous:previous];
+  self.showTodayToggle =
+      [self displaySwitchRow:@"Show today's usage"
+                         key:@"codex_show_today"
+                        tip:@"Add a per-account row with quota burned since midnight"
+                   previous:previous];
+  self.showResetCreditsToggle =
+      [self displaySwitchRow:@"Show reset credits"
+                         key:@"codex_show_reset_credits"
+                        tip:@"Add a row for the free window resets a plan grants"
+                   previous:previous];
+}
+
 
 - (NSArray *)fieldsForProvider:(NSString *)provider {
   if ([provider isEqualToString:@"opencode"]) {
@@ -1258,8 +1456,8 @@ static const CGFloat kMinPanelHeight = 300.0;
   // Provider enable switches go out with every settings save.
   NSMutableDictionary *providerPayload = [NSMutableDictionary dictionary];
   for (NSDictionary *row in self.providerCheckboxRows) {
-    NSButton *checkbox = row[@"checkbox"];
-    providerPayload[row[@"id"]] = @(checkbox.state == NSControlStateValueOn);
+    NSSwitch *toggle = row[@"switch"];
+    providerPayload[row[@"id"]] = @(toggle.state == NSControlStateValueOn);
   }
   NSData *providerData = [NSJSONSerialization dataWithJSONObject:providerPayload options:0 error:nil];
   if (providerData != nil) {
@@ -1274,12 +1472,12 @@ static const CGFloat kMinPanelHeight = 300.0;
       if (home.length == 0) {
         continue;
       }
-      NSButton *checkbox = row[@"checkbox"];
+      NSSwitch *toggle = row[@"switch"];
       NSTextField *labelField = row[@"labelField"];
       [payload addObject:@{
         @"home" : home,
         @"label" : labelField.stringValue ?: @"",
-        @"enabled" : @(checkbox.state == NSControlStateValueOn),
+        @"enabled" : @(toggle.state == NSControlStateValueOn),
       }];
     }
     NSMutableDictionary *settings = [NSMutableDictionary dictionary];
