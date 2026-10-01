@@ -1,10 +1,10 @@
 [package]
-name = "ocg"
+name = "tokue"
 version = "0.0.6"
 edition = "2021"
 
 [[bin]]
-name = "ocg"
+name = "tokue"
 path = "src/main.rs"
 
 [dependencies]
@@ -16,6 +16,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 dirs = "5"
 rusqlite = { version = "0.32", features = ["bundled"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# Already built for rustls; used directly for PKCE (SHA-256, secure random).
+ring = "0.17"
 
 [build-dependencies]
 cc = "1"

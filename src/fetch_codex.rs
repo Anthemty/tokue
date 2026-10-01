@@ -1,7 +1,8 @@
 // fetch_codex.rs — ChatGPT subscription usage for one or more accounts.
 //
-// Reads each account's OAuth access token from its CODEX_HOME (never writes),
-// then asks the same private endpoint the Codex CLI itself uses:
+// Takes each account's OAuth access token — Codex's own from ~/.codex (never
+// refreshed here), saved ones from ocg's store (see codex_accounts.rs) — and
+// asks the same private endpoint the Codex CLI itself uses:
 //
 //   GET https://chatgpt.com/backend-api/wham/usage
 //   Authorization: Bearer <access_token>
@@ -25,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::codex_accounts::{self, AccountIdentity};
 use crate::config::Config;
-use crate::providers::{format_duration, ProviderFetchResult, UsageMeter};
+use crate::providers::{format_duration, reset_clock, resolve_cli, run_cli, scratch_dir, ProviderFetchResult, UsageMeter};
 use crate::store;
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
@@ -105,14 +106,21 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    /// Highest of the two window percentages (0-100), forced to 100 on a limit.
+    /// The account's one headline percentage (0-100), forced to 100 on a
+    /// limit. Prefers the primary (5h) window over the secondary (weekly)
+    /// one when both are present — the shorter window is the more
+    /// immediately actionable number, not whichever happens to read higher.
     pub fn criticality(&self) -> i32 {
         if self.limit_reached {
             return 100;
         }
-        let p = self.primary.as_ref().map(|w| w.used_percent).unwrap_or(0);
-        let s = self.secondary.as_ref().map(|w| w.used_percent).unwrap_or(0);
-        p.max(s).clamp(0, 100)
+        let pct = self
+            .primary
+            .as_ref()
+            .map(|w| w.used_percent)
+            .or_else(|| self.secondary.as_ref().map(|w| w.used_percent))
+            .unwrap_or(0);
+        pct.clamp(0, 100)
     }
 }
 
@@ -184,12 +192,16 @@ fn parse_wham(v: &serde_json::Value) -> Result<Snapshot, String> {
                     .and_then(|t| t.as_str())
                     .map(|s| s.to_string())
             }),
+        // How many resets the account HOLDS (`available_count`), not how many
+        // it could spend this instant (`applicable_available_count`, which is
+        // 0 whenever the account is not currently rate-limited and so hid the
+        // row entirely for accounts that do own resets).
         reset_credits: v
             .get("rate_limit_reset_credits")
-            .and_then(|r| as_i64_field(r, "applicable_available_count"))
+            .and_then(|r| as_i64_field(r, "available_count"))
             .or_else(|| {
                 v.get("rate_limit_reset_credits")
-                    .and_then(|r| as_i64_field(r, "available_count"))
+                    .and_then(|r| as_i64_field(r, "applicable_available_count"))
             }),
         spend: spend.and_then(parse_spend),
         fetched_at: now_unix(),
@@ -369,15 +381,41 @@ fn curl_fetch(acct: &AccountIdentity) -> Result<Snapshot, String> {
 }
 
 fn codex_binary() -> String {
-    std::env::var("OCG_CODEX_BIN").unwrap_or_else(|_| "codex".to_string())
+    resolve_cli("codex", "TOKUE_CODEX_BIN")
+}
+
+/// Start an account's 5h window on demand. The window only begins with the
+/// first real request, so a user who wants it to end at a time of their own
+/// choosing (lunch, end of day) can kick it off now with the cheapest request
+/// there is: one `codex exec` in an empty scratch directory, read-only
+/// sandbox, session not persisted. The CLI owns the OAuth tokens, so this
+/// goes through exactly the same login the account already uses.
+pub fn start_window(key: &str) -> Result<(), String> {
+    let run_in = |home: &std::path::Path| -> Result<(), String> {
+        let scratch = scratch_dir()?;
+        let mut cmd = Command::new(codex_binary());
+        cmd.args(["exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--cd"])
+            .arg(&scratch)
+            .arg("Reply with the single word OK and nothing else.")
+            .env("CODEX_HOME", home);
+        run_cli(cmd, Duration::from_secs(120))
+    };
+    if codex_accounts::is_active(key) {
+        run_in(&codex_accounts::codex_home())
+    } else {
+        // A saved account is lent to the CLI in a throwaway home; whatever
+        // it refreshes comes back to the store.
+        codex_accounts::with_borrowed_home(key, run_in)
+    }
 }
 
 /// Ask the Codex CLI for the same numbers over `codex app-server`. The CLI owns
-/// the OAuth refresh, so a stale access token is refreshed on its side.
+/// the OAuth refresh, so a stale access token is refreshed on its side. Only
+/// for Codex's own account: a saved one is refreshed by ocg (saved_token).
 fn rpc_fetch(acct: &AccountIdentity) -> Result<Snapshot, String> {
     let mut child: Child = Command::new(codex_binary())
         .arg("app-server")
-        .env("CODEX_HOME", &acct.home)
+        .env("CODEX_HOME", codex_accounts::codex_home())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -423,7 +461,7 @@ fn rpc_exchange(child: &mut Child) -> Result<Snapshot, String> {
 
     // 1. initialize
     let initialize = format!(
-        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"clientInfo\":{{\"name\":\"ocg\",\"version\":\"{}\"}}}}}}\n",
+        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"clientInfo\":{{\"name\":\"tokue\",\"version\":\"{}\"}}}}}}\n",
         env!("CARGO_PKG_VERSION")
     );
     stdin.write_all(initialize.as_bytes()).map_err(|e| e.to_string())?;
@@ -488,8 +526,11 @@ fn fetch_account(
     client: &reqwest::blocking::Client,
     acct: &AccountIdentity,
 ) -> Result<Snapshot, String> {
+    if !acct.active {
+        return fetch_saved(client, acct);
+    }
     // Debug hook: force the CLI path to exercise the refresh fallback.
-    if std::env::var("OCG_CODEX_FORCE_RPC").is_ok() {
+    if std::env::var("TOKUE_CODEX_FORCE_RPC").is_ok() {
         return rpc_fetch(acct).map_err(|e| format!("CLI usage read failed: {}", e));
     }
 
@@ -512,6 +553,27 @@ fn fetch_account(
                 }
             }
         },
+    }
+}
+
+/// A saved account: ocg renews its token itself, and once more if the server
+/// turns the current one away (revoked early, or refreshed elsewhere).
+fn fetch_saved(client: &reqwest::blocking::Client, acct: &AccountIdentity) -> Result<Snapshot, String> {
+    let mut acct = acct.clone();
+    acct.access_token = codex_accounts::saved_token(&acct.key, false)?;
+    match http_fetch(client, &acct) {
+        Ok(s) => Ok(s),
+        Err(FetchError::Unauthorized(e)) => {
+            acct.access_token = codex_accounts::saved_token(&acct.key, true)
+                .map_err(|refresh_err| format!("{}; {}", e, refresh_err))?;
+            match http_fetch(client, &acct) {
+                Ok(s) => Ok(s),
+                Err(_) => curl_fetch(&acct),
+            }
+        }
+        Err(FetchError::Other(e)) => {
+            curl_fetch(&acct).map_err(|curl_err| format!("{}; curl fallback: {}", e, curl_err))
+        }
     }
 }
 
@@ -585,14 +647,7 @@ fn reset_detail(w: &Window) -> String {
 }
 
 fn format_reset_clock(unix: i64) -> Option<String> {
-    use chrono::{Local, TimeZone};
-    let dt = Local.timestamp_opt(unix, 0).single()?;
-    let today = Local::now().date_naive();
-    if dt.date_naive() == today {
-        Some(dt.format("%H:%M").to_string())
-    } else {
-        Some(dt.format("%-m/%-d %H:%M").to_string())
-    }
+    reset_clock(unix)
 }
 
 /// How the panel should read the samples, from the Codex settings.
@@ -614,19 +669,14 @@ fn meters_for(
 ) -> Vec<UsageMeter> {
     let show_remaining = opts.show_remaining;
     let show_spend = opts.show_spend;
-    // Stamped on every row so the panel can hide one account locally.
-    let account_key = acct.home.clone();
+    // Stamped on every row: the card's identity for pinning and actions.
+    let account_key = acct.key.clone();
     let mut title = if acct.label.is_empty() && !snap.email.is_empty() {
         snap.email.clone()
     } else {
         acct.display_name()
     };
     let plan = if !snap.plan.is_empty() { snap.plan.clone() } else { acct.plan.clone() };
-    // Two homes can hold the same account; the card header shows each home on
-    // its own line, so the title only marks that the quota is shared.
-    if acct.duplicate_of.is_some() {
-        title = format!("{} ⧉", title);
-    }
     if stale {
         title.push_str(" · cached");
     }
@@ -709,31 +759,35 @@ fn meters_for(
     } else {
         Some(codex_accounts::plan_display(&plan))
     };
+    let tag = acct.active.then(|| "in Codex".to_string());
     for meter in meters.iter_mut() {
         meter.key = Some(account_key.clone());
         meter.badge = plan_badge.clone();
-        // Credits / reset credits are not quota: no amber/red.
+        meter.tag = tag.clone();
+        meter.can_start = true;
+        // Credits / reset credits are a balance and a count, not a fraction of
+        // a limit: no amber/red, and no "0%" or bar drawn from the placeholder
+        // percent — the real value is in the detail ("1 available").
         if meter.label == "Credits" || meter.label == "Reset credits" {
             meter.severity = None;
+            meter.informational = true;
         }
     }
     meters
 }
 
 fn problem_meters(acct: &AccountIdentity, problem: &str) -> Vec<UsageMeter> {
-    let mut title = acct.display_name();
-    title.push_str(" · ");
-    title.push_str(&acct.home_display);
-    if !acct.plan.is_empty() {
-        title.push_str(" · ");
-        title.push_str(&codex_accounts::plan_display(&acct.plan));
-    }
-    let mut meter = UsageMeter::grouped(title, "Login", 0, problem.to_string());
-    meter.key = Some(acct.home.clone());
+    let mut meter = UsageMeter::grouped(acct.display_name(), "Login", 0, problem.to_string());
+    meter.key = Some(acct.key.clone());
+    meter.severity = None;
+    meter.informational = true;
+    let plan = codex_accounts::plan_display(&acct.plan);
+    meter.badge = (!plan.is_empty()).then_some(plan);
+    meter.tag = acct.active.then(|| "in Codex".to_string());
     vec![meter]
 }
 
-/// One tooltip line per account: "~/.codex  stanty.ibg@gmail.com  Plus  5h 84%  7d 13%".
+/// One tooltip line per account: "in Codex  stanty.ibg@gmail.com  Plus  5h 84%  7d 13%".
 fn summary_line(
     acct: &AccountIdentity,
     snap: Option<&Snapshot>,
@@ -746,7 +800,7 @@ fn summary_line(
         Some(s) if acct.label.is_empty() && !s.email.is_empty() => s.email.clone(),
         _ => acct.display_name(),
     };
-    let mut line = format!("{}  {}", acct.home_display, name);
+    let mut line = format!("{}  {}", acct.place(), name);
     match (snap, err) {
         (Some(s), _) => {
             let plan = if !s.plan.is_empty() { s.plan.clone() } else { acct.plan.clone() };
@@ -781,9 +835,6 @@ fn summary_line(
             if stale {
                 line.push_str(" [stale]");
             }
-            if acct.duplicate_of.is_some() {
-                line.push_str(" [shares quota]");
-            }
         }
         (None, Some(e)) => {
             line.push_str("  ");
@@ -816,7 +867,7 @@ fn collect(cfg: &Config) -> Vec<AccountOutcome> {
         .enumerate()
         .map(|(index, acct)| {
             let client = client.clone();
-            let cached = cache.get(&acct.home).cloned();
+            let cached = cache.get(&acct.key).cloned();
             std::thread::spawn(move || {
                 if index > 0 {
                     std::thread::sleep(Duration::from_millis(250 * index as u64));
@@ -857,7 +908,7 @@ fn collect(cfg: &Config) -> Vec<AccountOutcome> {
 pub fn fetch(cfg: &Config) -> ProviderFetchResult {
     let outcomes = collect(cfg);
     if outcomes.is_empty() {
-        return ProviderFetchResult::err("no ChatGPT logins found in ~/.codex*");
+        return ProviderFetchResult::err("no ChatGPT account — sign in to Codex, or add one in Preferences");
     }
 
     let mut meters: Vec<UsageMeter> = Vec::new();
@@ -875,10 +926,10 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
     for outcome in &outcomes {
         let opts = MeterOptions {
             show_spend: cfg.codex.show_spend,
-            show_remaining: cfg.codex.show_remaining,
+            show_remaining: cfg.show_remaining(),
             show_today: cfg.codex.show_today,
             show_reset_credits: cfg.codex.show_reset_credits,
-            today_consumed: today.get(&outcome.acct.home).copied(),
+            today_consumed: today.get(&outcome.acct.key).copied(),
         };
         match (&outcome.snap, &outcome.err) {
             (Some(snap), _) => {
@@ -890,10 +941,10 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
                     outcome.stale,
                     outcome.err.as_deref(),
                     cfg.codex.show_spend,
-                    cfg.codex.show_remaining,
+                    cfg.show_remaining(),
                 ));
                 if !outcome.stale {
-                    store::record_codex(&outcome.acct.home, &outcome.acct.label, snap);
+                    store::record_codex(&outcome.acct.key, &outcome.acct.label, snap);
                 }
             }
             (None, Some(err)) => {
@@ -904,9 +955,9 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
                     false,
                     Some(err),
                     cfg.codex.show_spend,
-                    cfg.codex.show_remaining,
+                    cfg.show_remaining(),
                 ));
-                failures.push(format!("{}: {}", outcome.acct.home_display, err));
+                failures.push(format!("{}: {}", outcome.acct.display_name(), err));
             }
             (None, None) => {}
         }
@@ -927,12 +978,12 @@ pub fn debug_json(cfg: &Config) -> String {
         .iter()
         .map(|o| {
             serde_json::json!({
-                "home": o.acct.home_display,
+                "key": o.acct.key,
+                "place": o.acct.place(),
                 "label": o.acct.label,
                 "session_email": o.acct.email,
                 "plan": o.acct.plan,
                 "account_id": o.acct.account_id,
-                "duplicate_of": o.acct.duplicate_of,
                 "stale": o.stale,
                 "error": o.err,
                 "snapshot": o.snap,
@@ -970,7 +1021,9 @@ mod tests {
         assert_eq!(snap.primary.as_ref().unwrap().used_percent, 84);
         assert_eq!(snap.secondary.as_ref().unwrap().used_percent, 13);
         assert_eq!(snap.criticality(), 84);
-        assert_eq!(snap.reset_credits, Some(0));
+        // Owns one reset, none applicable right now because the account is not
+        // rate-limited — the panel reports what it holds, so the row still shows.
+        assert_eq!(snap.reset_credits, Some(1));
         assert!(!snap.limit_reached);
     }
 
@@ -1042,15 +1095,14 @@ mod tests {
     #[test]
     fn window_meters_carry_used_severity_in_remaining_mode() {
         let acct = AccountIdentity {
-            home: "/tmp/.codex".to_string(),
-            home_display: "~/.codex".to_string(),
+            key: "codex:a".to_string(),
+            active: true,
             label: String::new(),
             email: "a@example.com".to_string(),
             plan: "plus".to_string(),
             account_id: "a".to_string(),
             access_token: String::new(),
             exp: None,
-            duplicate_of: None,
             problem: None,
         };
         let snap = Snapshot {

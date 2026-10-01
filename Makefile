@@ -1,7 +1,9 @@
-APP       := OCGTool.app
-BINARY    := target/release/ocg
+APP       := tokue.app
+BINARY    := target/release/tokue
+VERSION   := $(shell /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Info.plist)
+DMG       := tokue-$(VERSION).dmg
 
-.PHONY: all build app run clean
+.PHONY: all build app run dmg clean
 
 all: app
 
@@ -21,6 +23,20 @@ app: $(BINARY)
 run: app
 	open $(APP)
 
+# A disk image to hand out: the app and an Applications link to drag it onto.
+# Signed ad hoc (no Developer ID here), sealing Info.plist too — a download
+# with a partial signature is reported as "damaged" rather than unverified.
+dmg: app
+	codesign --force --sign - --identifier com.tokue.app $(APP)
+	codesign --verify --strict $(APP)
+	rm -rf dist/dmg $(DMG)
+	mkdir -p dist/dmg
+	ditto $(APP) dist/dmg/$(APP)
+	ln -s /Applications dist/dmg/Applications
+	hdiutil create -volname "tokue $(VERSION)" -srcfolder dist/dmg -ov -format UDZO $(DMG)
+	rm -rf dist
+	@echo "✓ $(DMG) built"
+
 clean:
-	rm -rf $(APP) target
+	rm -rf $(APP) target dist tokue-*.dmg
 	@echo "✓ cleaned"

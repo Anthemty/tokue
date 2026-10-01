@@ -6,10 +6,15 @@
 
 use std::time::Duration;
 
-use chrono::{DateTime, Local, TimeZone, Utc};
+use chrono::Utc;
 
 use crate::config::Config;
-use crate::providers::{ProviderFetchResult, UsageMeter};
+use crate::providers::{format_duration, window_meter, ProviderFetchResult};
+
+/// Meter key for the single MiniMax card (one API key, one plan).
+pub const CARD_KEY: &str = "minimax";
+/// Card title: the API calls the subscription a token plan.
+const CARD_TITLE: &str = "Token plan";
 
 pub fn fetch(cfg: &Config) -> ProviderFetchResult {
     let key = &cfg.minimax.api_key;
@@ -134,55 +139,87 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
     let interval_used = (100.0 - interval_remaining) as i32;
     let weekly_used = (100.0 - weekly_remaining) as i32;
 
-    // Reset times from ms-epoch, rounded up (+1).
-    let reset_5h = {
-        let end_ms = get_float(entry, &["end_time", "endTime"]);
-        if end_ms > 0.0 {
-            if let Some(t) = Utc.timestamp_millis_opt(end_ms as i64).single() {
-                let local: DateTime<Local> = DateTime::from(t);
-                let now = Local::now();
-                if local > now {
-                    let h = (local - now).num_seconds() / 3600;
-                    format!("{}h", h + 1)
-                } else {
-                    String::new()
-                }
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        }
-    };
+    let reset_5h = reset_in(entry, &["end_time", "endTime"]);
+    let reset_week = reset_in(entry, &["weekly_end_time", "weeklyEndTime"]);
 
-    let reset_week = {
-        let week_end_ms = get_float(entry, &["weekly_end_time", "weeklyEndTime"]);
-        if week_end_ms > 0.0 {
-            if let Some(t) = Utc.timestamp_millis_opt(week_end_ms as i64).single() {
-                let local: DateTime<Local> = DateTime::from(t);
-                let now = Local::now();
-                if local > now {
-                    let h = (local - now).num_seconds() / 3600;
-                    format!("{}d", h / 24 + 1)
-                } else {
-                    String::new()
-                }
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        }
-    };
+    // Prefer the 5h window as the headline number over weekly — the shorter
+    // window is the more immediately actionable one, not whichever is worse.
+    let criticality = interval_used;
 
-    let criticality = interval_used.max(weekly_used);
-
-    let meters = vec![
-        UsageMeter::new("5h", interval_used, reset_5h),
-        UsageMeter::new("Weekly", weekly_used, reset_week),
+    let left = cfg.show_remaining();
+    let mut meters = vec![
+        window_meter("5h", interval_used, reset_5h, left),
+        window_meter("Weekly", weekly_used, reset_week, left),
     ];
+    // One card, like the other subscription providers, so it has somewhere to
+    // carry the start-window button and its feedback.
+    for meter in meters.iter_mut() {
+        meter.group = Some(CARD_TITLE.to_string());
+        meter.key = Some(CARD_KEY.to_string());
+        meter.can_start = true;
+    }
 
     ProviderFetchResult::ok(criticality, meters)
+}
+
+/// Send the cheapest real request the plan will count — one token from the
+/// current model — so the window registers activity now. (MiniMax's windows
+/// appear to run on a fixed schedule rather than starting with the first
+/// request, so unlike Codex this does not move the reset time; it is offered
+/// for parity and for the case where a plan does behave that way.)
+pub fn start_window(cfg: &Config) -> Result<(), String> {
+    let key = &cfg.minimax.api_key;
+    if key.is_empty() {
+        return Err("not configured".to_string());
+    }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let body = serde_json::json!({
+        "model": "MiniMax-M2",
+        "messages": [{"role": "user", "content": "Reply with the single word OK."}],
+        "max_tokens": 1,
+    });
+    let resp = client
+        .post("https://api.minimax.io/v1/text/chatcompletion_v2")
+        .header("Authorization", format!("Bearer {}", key))
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .send()
+        .map_err(|e| format!("request failed: {}", e))?;
+    let status = resp.status();
+    let text = resp.text().unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("HTTP {}: {}", status.as_u16(), text.chars().take(120).collect::<String>()));
+    }
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("parse: {}", e))?;
+    let code = get_int(&v, &["status_code"]);
+    if code != 0 {
+        let msg = v
+            .get("base_resp")
+            .and_then(|b| b.get("status_msg"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("");
+        return Err(format!("api error {}: {}", code, msg));
+    }
+    Ok(())
+}
+
+/// Time left until a window's ms-epoch end, in the same wording every other
+/// provider uses ("2h 21m", "1d 4h"). The old bespoke arithmetic forced whole
+/// hours on the 5h window and whole DAYS on the weekly one, so a weekly window
+/// six hours from resetting was reported as "1d".
+fn reset_in(entry: &serde_json::Value, keys: &[&str]) -> String {
+    let end_ms = get_float(entry, keys);
+    if end_ms <= 0.0 {
+        return String::new();
+    }
+    let secs = end_ms as i64 / 1000 - Utc::now().timestamp();
+    if secs <= 0 {
+        return String::new();
+    }
+    format_duration(secs)
 }
 
 // ---------- flexible JSON helpers (port of minimax.go) ----------
@@ -298,4 +335,41 @@ fn get_slice_map<'a>(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry_ending_in(secs_5h: i64, secs_week: i64) -> serde_json::Value {
+        let now_ms = Utc::now().timestamp() * 1000;
+        serde_json::json!({
+            "model_name": "general",
+            "end_time": now_ms + secs_5h * 1000,
+            "weekly_end_time": now_ms + secs_week * 1000,
+        })
+    }
+
+    #[test]
+    fn weekly_window_hours_away_reports_hours_not_a_day() {
+        // The weekly window resets in six hours; it used to render as "1d"
+        // because the arithmetic divided by 86400 and added one. The extra 30s
+        // keeps the truncation to whole minutes off a boundary.
+        let entry = entry_ending_in(2 * 3600 + 21 * 60 + 30, 6 * 3600 + 21 * 60 + 30);
+        assert_eq!(reset_in(&entry, &["end_time"]), "2h 21m");
+        assert_eq!(reset_in(&entry, &["weekly_end_time"]), "6h 21m");
+    }
+
+    #[test]
+    fn a_window_more_than_a_day_out_still_reads_in_days() {
+        let entry = entry_ending_in(90, 3 * 86400 + 4 * 3600 + 30);
+        assert_eq!(reset_in(&entry, &["weekly_end_time"]), "3d 4h");
+    }
+
+    #[test]
+    fn a_passed_or_missing_window_has_no_countdown() {
+        let entry = entry_ending_in(-3600, -60);
+        assert_eq!(reset_in(&entry, &["end_time"]), "");
+        assert_eq!(reset_in(&serde_json::json!({}), &["end_time"]), "");
+    }
 }

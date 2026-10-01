@@ -12,8 +12,7 @@ use std::os::raw::c_char;
 
 extern "C" {
     fn runApp();
-    fn setStatusIcon(bytes: *const std::ffi::c_void, len: usize);
-    fn setStatusTitle(title: *const c_char, severity: i32);
+    fn setStatusGauge(percent: i32, severity: i32, has_data: i32);
     fn setStatusTooltip(tooltip: *const c_char);
     fn updatePanelState(state_json: *const c_char);
 }
@@ -23,17 +22,11 @@ pub fn run_app() {
     unsafe { runApp() }
 }
 
-/// Push a template PNG to the status bar icon. `bytes` is copied by Obj-C.
-pub fn set_status_icon(bytes: &[u8]) {
-    unsafe { setStatusIcon(bytes.as_ptr() as *const _, bytes.len()) }
-}
-
-/// Set the short text shown next to the status icon (e.g. "84%"), plus how
-/// close the worst quota is to its limit (0-100, used side) so the badge can be
-/// coloured regardless of whether the number reads used or remaining.
-pub fn set_status_title(title: &str, severity: i32) {
-    let c = CString::new(title).unwrap_or_else(|_| CString::new("").unwrap());
-    unsafe { setStatusTitle(c.as_ptr(), severity) }
+/// Draw the menu bar gauge: the ring's arc and the number inside it both show
+/// `percent`; `severity` (always quota used, 0-100) picks the colour. With no
+/// data the item is a plain grey ring.
+pub fn set_status_gauge(percent: i32, severity: i32, has_data: bool) {
+    unsafe { setStatusGauge(percent, severity, has_data as i32) }
 }
 
 /// Set the status bar tooltip. The string is copied by Obj-C.

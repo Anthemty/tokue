@@ -1,6 +1,6 @@
 // store.rs — SQLite store for usage history and the last-good snapshot cache.
 //
-// Two jobs, one file (~/.config/ocg/ocg.db, WAL):
+// Two jobs, one file (~/.config/tokue/tokue.db, WAL):
 //
 //   samples    one row per provider/account/metric per refresh: the time series
 //              that answers questions a single snapshot cannot ("how much did I
@@ -30,7 +30,7 @@ const CACHE_MAX_AGE_SECS: i64 = 24 * 3600;
 static DB: LazyLock<Mutex<Option<Connection>>> = LazyLock::new(|| Mutex::new(open()));
 
 fn db_path() -> Option<PathBuf> {
-    config::config_dir_path().ok().map(|d| d.join("ocg.db"))
+    config::config_dir_path().ok().map(|_| config::db_path())
 }
 
 fn open() -> Option<Connection> {
@@ -56,7 +56,7 @@ fn with_db<T>(f: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> Option<T> {
             use std::sync::atomic::{AtomicBool, Ordering};
             static REPORTED: AtomicBool = AtomicBool::new(false);
             if !REPORTED.swap(true, Ordering::Relaxed) {
-                eprintln!("ocg: sqlite error: {}", err);
+                eprintln!("tokue: sqlite error: {}", err);
             }
             None
         }
@@ -220,6 +220,37 @@ pub fn record_codex(home: &str, label: &str, snapshot: &Snapshot) {
         conn.execute("DELETE FROM samples WHERE ts < ?1", params![cutoff])?;
         Ok(())
     });
+}
+
+/// Move a Codex account's history and cached snapshot from one account key to
+/// another (the path keys of before the account store, to account keys). Two
+/// homes holding one account merge: the samples are the same account's, and
+/// the newer snapshot wins.
+pub fn rekey_codex(old: &str, new: &str) {
+    if old == new {
+        return;
+    }
+    let (old, new) = (old.to_string(), new.to_string());
+    with_db(move |conn| rekey_codex_in(conn, &old, &new));
+}
+
+fn rekey_codex_in(conn: &Connection, old: &str, new: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE samples SET account = ?2 WHERE provider = 'codex' AND account = ?1",
+        params![old, new],
+    )?;
+    conn.execute(
+        "INSERT INTO snapshots(provider, account, ts, payload)
+             SELECT 'codex', ?2, ts, payload FROM snapshots WHERE provider = 'codex' AND account = ?1
+         ON CONFLICT(provider, account) DO UPDATE SET ts = excluded.ts, payload = excluded.payload
+             WHERE excluded.ts > snapshots.ts",
+        params![old, new],
+    )?;
+    conn.execute(
+        "DELETE FROM snapshots WHERE provider = 'codex' AND account = ?1",
+        params![old],
+    )?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -544,6 +575,27 @@ mod tests {
         assert_eq!(n, 1);
         let ts: i64 = conn.query_row("SELECT ts FROM snapshots", [], |r| r.get(0)).unwrap();
         assert_eq!(ts, 2000);
+    }
+
+    #[test]
+    fn rekeying_two_homes_of_one_account_merges_them() {
+        let conn = db();
+        record_codex_into(&conn, "/h/.codex", "", &snap(1000, 10, 5000, 20));
+        record_codex_into(&conn, "/h/.codex5", "", &snap(3000, 40, 5000, 20));
+        rekey_codex_in(&conn, "/h/.codex", "codex:ibg").unwrap();
+        rekey_codex_in(&conn, "/h/.codex5", "codex:ibg").unwrap();
+        let accounts: Vec<String> = conn
+            .prepare("SELECT DISTINCT account FROM samples")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(accounts, vec!["codex:ibg"], "every sample follows the account");
+        let (n, ts): (i64, i64) = conn
+            .query_row("SELECT COUNT(*), MAX(ts) FROM snapshots", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!((n, ts), (1, 3000), "one snapshot, the newer one");
     }
 
     #[test]

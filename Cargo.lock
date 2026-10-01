@@ -658,21 +658,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ocg"
-version = "0.0.6"
-dependencies = [
- "cc",
- "chrono",
- "dirs",
- "image",
- "regex",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1227,6 +1212,22 @@ checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
 dependencies = [
  "rustls",
  "tokio",
+]
+
+[[package]]
+name = "tokue"
+version = "0.0.6"
+dependencies = [
+ "cc",
+ "chrono",
+ "dirs",
+ "image",
+ "regex",
+ "reqwest",
+ "ring",
+ "rusqlite",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

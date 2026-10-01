@@ -25,6 +25,24 @@ pub static LAST_UPDATED: LazyLock<RwLock<Option<DateTime<Local>>>> =
 /// (replaces Go's refreshMu).
 pub static REFRESH_MU: Mutex<()> = Mutex::new(());
 
+/// One transient line of feedback per account card (keyed by the meter key,
+/// e.g. a CODEX_HOME) for actions the user starts from the card — "starting
+/// the window…", or why it failed. Cleared when the action succeeds.
+pub static CARD_NOTICES: LazyLock<RwLock<HashMap<String, String>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+pub fn set_card_notice(key: &str, notice: Option<&str>) {
+    let mut notices = CARD_NOTICES.write().unwrap();
+    match notice {
+        Some(n) => {
+            notices.insert(key.to_string(), n.to_string());
+        }
+        None => {
+            notices.remove(key);
+        }
+    }
+}
+
 /// Consecutive cycles in which every provider failed — drives backoff.
 static FAILED_CYCLES: AtomicU32 = AtomicU32::new(0);
 

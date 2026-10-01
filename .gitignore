@@ -3,6 +3,9 @@ ocg
 ocg-*-amd64
 ocg-*-arm64
 OCGTool.app/
+tokue.app/
+*.dmg
+dist/
 
 # Local tooling
 .reasonix/

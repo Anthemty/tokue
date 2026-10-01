@@ -95,10 +95,17 @@ pub fn fetch(cfg: &Config) -> ProviderFetchResult {
         if c < 0 { 0 } else { c }
     };
 
+    let mut granted = UsageMeter::new("Granted", 0, format!("{}{}", cur, info.granted_balance));
+    granted.severity = None;
+    granted.informational = true;
+    let mut topped = UsageMeter::new("Topped", 0, format!("{}{}", cur, info.topped_up_balance));
+    topped.severity = None;
+    topped.informational = true;
+
     let meters = vec![
         UsageMeter::new("Balance", criticality, format!("{}{} left", cur, info.total_balance)),
-        UsageMeter::new("Granted", 0, format!("{}{}", cur, info.granted_balance)),
-        UsageMeter::new("Topped", 0, format!("{}{}", cur, info.topped_up_balance)),
+        granted,
+        topped,
     ];
 
     ProviderFetchResult::ok(criticality, meters)

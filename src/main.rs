@@ -8,17 +8,20 @@
 // `ocg --once [provider|all]` runs one fetch cycle headlessly and prints JSON,
 // which is how the ChatGPT account data is verified without the UI.
 
+mod accounts;
 mod codex_accounts;
 mod config;
+mod fetch_claude;
 mod fetch_codex;
 mod fetch_commandcode;
 mod fetch_deepseek;
 mod fetch_minimax;
 mod fetch_opencode;
 mod ffi;
-mod icon;
+mod i18n;
 mod panel_state;
 mod providers;
+mod signin;
 mod state;
 mod store;
 
@@ -32,6 +35,7 @@ use chrono::Local;
 use providers::{ProviderFetchResult, PROVIDERS};
 
 fn main() {
+    config::migrate_from_ocg();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--once") {
         run_once_cli(&args);
@@ -73,6 +77,7 @@ fn run_once_cli(args: &[String]) {
         "deepseek" => fetch_deepseek::fetch(&cfg),
         "minimax" => fetch_minimax::fetch(&cfg),
         "commandcode" => fetch_commandcode::fetch(&cfg),
+        "claude" => fetch_claude::fetch(&cfg),
         other => {
             eprintln!("unknown provider: {}", other);
             std::process::exit(2);
@@ -104,8 +109,8 @@ fn print_stats() {
         "since_local_midnight": since,
         "today": accounts
             .into_iter()
-            .map(|(home, consumed)| serde_json::json!({
-                "home": home,
+            .map(|(account, consumed)| serde_json::json!({
+                "account": account,
                 "consumed_percent_of_5h_window": (consumed * 10.0).round() / 10.0,
             }))
             .collect::<Vec<_>>(),
@@ -179,6 +184,7 @@ fn fetch_provider(name: &str, cfg: &config::Config) -> ProviderFetchResult {
         "minimax" => fetch_minimax::fetch(cfg),
         "codex" => fetch_codex::fetch(cfg),
         "commandcode" => fetch_commandcode::fetch(cfg),
+        "claude" => fetch_claude::fetch(cfg),
         other => ProviderFetchResult::err(format!("unknown provider: {}", other)),
     }
 }
@@ -195,14 +201,11 @@ fn badge_percent(max_severity: i32, show_remaining: bool) -> i32 {
 }
 
 /// Minutes until the next cycle: configured interval, doubled while cycles fail.
+/// The value set in Preferences (`refresh_minutes`) wins over the older
+/// config-only Codex override, so what the UI shows is what runs.
 fn next_interval_minutes() -> u32 {
     let cfg = config::load();
-    let base = cfg
-        .codex
-        .refresh_minutes
-        .or(cfg.refresh_minutes)
-        .unwrap_or(15)
-        .clamp(1, 240);
+    let base = cfg.effective_refresh_minutes();
     match state::consecutive_failed_cycles() {
         0 => base,
         1 => (base * 2).min(60),
@@ -211,16 +214,44 @@ fn next_interval_minutes() -> u32 {
 }
 
 /// Recompute icon/title/tooltip/state and forward them to the UI.
+/// Among the meters that belong to one card (`meter.key == key`, e.g. one
+/// Codex account), the same window-priority rule as everywhere else: prefer
+/// the 5h/rolling reading over weekly over monthly, rather than whichever is
+/// worst. `None` when nothing in `meters` carries that key.
+fn severity_for_key(meters: &[providers::UsageMeter], key: &str) -> Option<i32> {
+    let matching: Vec<&providers::UsageMeter> =
+        meters.iter().filter(|m| m.key.as_deref() == Some(key)).collect();
+    if matching.is_empty() {
+        return None;
+    }
+    matching
+        .iter()
+        .find(|m| m.label.starts_with("5h") || m.label.starts_with("Rolling"))
+        .or_else(|| matching.iter().find(|m| m.label.starts_with("Weekly")))
+        .or_else(|| matching.first())
+        .and_then(|m| m.severity)
+}
+
 fn push_ui_state() {
-    let (max_crit, summary) = {
+    let cfg = config::load();
+    i18n::apply(&cfg.language);
+
+    // The badge reflects whichever provider is currently selected in the
+    // popover, not the worst across all of them — switching tabs changes
+    // what the menu bar shows. Same disabled-provider fallback as
+    // panel_state::build_json, so the two stay in sync.
+    let mut active_id = cfg.active_provider.clone();
+    if !cfg.provider_enabled(&active_id) {
+        if let Some(first) = PROVIDERS.iter().copied().find(|id| cfg.provider_enabled(id)) {
+            active_id = first.to_string();
+        }
+    }
+
+    let (active_crit, active_ok, summary) = {
         let cache = state::PROVIDER_CACHE.read().unwrap();
-        let mut m = 0;
         let mut summaries: Vec<String> = Vec::new();
         for &id in PROVIDERS {
             if let Some(cached) = cache.get(id) {
-                if cached.err.is_none() && cached.criticality > m {
-                    m = cached.criticality;
-                }
                 if let Some(text) = &cached.summary {
                     if !text.is_empty() {
                         summaries.push(format!("{}:\n{}", providers::label(id), text));
@@ -228,36 +259,68 @@ fn push_ui_state() {
                 }
             }
         }
-        (m, summaries.join("\n\n"))
+        match cache.get(active_id.as_str()) {
+            Some(cached) => {
+                // A pinned card that is there but has no numbers (signed out,
+                // unreadable) shows as "no data" — falling back to the
+                // provider's worst would show another account's figure under
+                // the pinned one's name.
+                let mut pinned_has_data = true;
+                let crit = match cfg.selected_key(&active_id) {
+                    Some(key) => match severity_for_key(&cached.meters, key) {
+                        Some(sev) => sev,
+                        None if cached.meters.iter().any(|m| m.key.as_deref() == Some(key)) => {
+                            pinned_has_data = false;
+                            0
+                        }
+                        None => cached.criticality,
+                    },
+                    None => cached.criticality,
+                };
+                (crit, cached.err.is_none() && pinned_has_data, summaries.join("\n\n"))
+            }
+            None => (0, false, summaries.join("\n\n")),
+        }
     };
 
-    let cfg = config::load();
-    // The badge reads the same way as the panel: quota left when the meters show
-    // remaining, otherwise quota used. Colour always means the same thing —
-    // under 10% left is red, under 30% is amber.
-    let show_remaining = cfg.codex.show_remaining;
-    let badge = badge_percent(max_crit, show_remaining);
-    let wording = if show_remaining { "least remaining" } else { "worst used" };
-
-    let icon = icon::usage_icon_bytes(badge);
-    ffi::set_status_icon(&icon);
-    ffi::set_status_title(&format!("{}%", badge), max_crit);
-    let tooltip = if summary.is_empty() {
-        format!("Usage Monitor — {}: {}%", wording, badge)
+    let active_label = providers::label(&active_id);
+    if !active_ok {
+        // Not configured, errored, or no successful fetch yet for the
+        // selected provider — an empty ring, not a falsely-healthy "100%
+        // left" green one.
+        ffi::set_status_gauge(0, 0, false);
+        ffi::set_status_tooltip(&tooltip(active_label, "no data", &summary));
     } else {
-        format!("Usage Monitor — {}: {}%\n\n{}", wording, badge, summary)
-    };
-    ffi::set_status_tooltip(&tooltip);
+        // The badge reads the same way as the panel: quota left when the
+        // meters show remaining, otherwise quota used. Colour always means
+        // the same thing — under 10% left is red, under 30% is amber.
+        let show_remaining = cfg.show_remaining();
+        let badge = badge_percent(active_crit, show_remaining);
+        let wording = if show_remaining { "left" } else { "used" };
+
+        ffi::set_status_gauge(badge, active_crit, true);
+        ffi::set_status_tooltip(&tooltip(active_label, &format!("{}% {}", badge, wording), &summary));
+    }
 
     let state_json = panel_state::build_json(&cfg);
     ffi::update_panel_state(&state_json);
 }
 
+/// "tokue — Codex: 42% left", then every provider's breakdown.
+fn tooltip(provider: &str, reading: &str, summary: &str) -> String {
+    let head = format!("tokue — {}: {}", provider, i18n::tr(reading));
+    if summary.is_empty() {
+        head
+    } else {
+        format!("{}\n\n{}", head, i18n::tr_lines(summary))
+    }
+}
+
 /// Push just a neutral icon + loading tooltip (before first fetch).
 fn push_icon_only() {
-    let icon = icon::neutral_icon_bytes();
-    ffi::set_status_icon(&icon);
-    ffi::set_status_tooltip("Usage Monitor — loading");
+    i18n::apply(&config::load().language);
+    ffi::set_status_gauge(0, 0, false);
+    ffi::set_status_tooltip(&format!("tokue — {}", i18n::tr("loading")));
 }
 
 /// Change the active provider and re-push state (no fetch).
@@ -277,8 +340,18 @@ fn switch_provider(name: &str) {
 pub extern "C" fn goOnReady() {
     push_icon_only();
     thread::spawn(|| loop {
+        migrate_codex_homes_once();
         refresh_once();
-        thread::sleep(Duration::from_secs(next_interval_minutes() as u64 * 60));
+        // Sleep in short ticks and re-read the interval each time, so a change
+        // made in Preferences takes effect within half a minute instead of
+        // after whatever the old interval was.
+        let started = std::time::Instant::now();
+        loop {
+            thread::sleep(Duration::from_secs(30));
+            if started.elapsed() >= Duration::from_secs(next_interval_minutes() as u64 * 60) {
+                break;
+            }
+        }
     });
 }
 
@@ -301,19 +374,12 @@ pub extern "C" fn goSaveCredentials(
 ) {
     let p = unsafe { cstr_to_string(provider) };
     let f = unsafe { cstr_to_string(field) };
-    let mut v = unsafe { cstr_to_string(value) };
+    let v = unsafe { cstr_to_string(value) };
     thread::spawn(move || {
         let mut cfg = config::load();
         let matched = match (p.as_str(), f.as_str()) {
-            ("opencode", "workspace_id") => {
-                cfg.opencode.workspace_id = v;
-                true
-            }
-            ("opencode", "auth_cookie") => {
-                if !v.is_empty() && !v.starts_with("auth=") {
-                    v = format!("auth={}", v);
-                }
-                cfg.opencode.auth_cookie = v;
+            ("opencode", "api_key") => {
+                cfg.opencode.api_key = v;
                 true
             }
             ("deepseek", "api_key") => {
@@ -360,7 +426,7 @@ pub extern "C" fn goSaveProviderEnabled(json: *const c_char) {
     });
 }
 
-/// Save the Codex settings ({"accounts":[{home,label,enabled}],"show_spend":bool}).
+/// Save the Codex settings ({"accounts":[{key,label,enabled}],"show_spend":bool}).
 #[no_mangle]
 pub extern "C" fn goSaveCodexAccounts(json: *const c_char) {
     let payload = unsafe { cstr_to_string(json) };
@@ -368,7 +434,9 @@ pub extern "C" fn goSaveCodexAccounts(json: *const c_char) {
         let mut cfg = config::load();
         match parse_codex_settings(&payload) {
             Some(settings) => {
-                cfg.codex.accounts = settings.accounts;
+                if let Some(accounts) = settings.accounts {
+                    cfg.codex.accounts = accounts;
+                }
                 cfg.codex.show_spend = settings.show_spend;
                 cfg.codex.show_remaining = settings.show_remaining;
                 cfg.codex.show_today = settings.show_today;
@@ -376,19 +444,178 @@ pub extern "C" fn goSaveCodexAccounts(json: *const c_char) {
                 let _ = config::save(&mut cfg);
                 refresh_once();
             }
-            None => eprintln!("ocg: ignoring malformed codex settings payload"),
+            None => eprintln!("tokue: ignoring malformed codex settings payload"),
         }
     });
 }
 
-/// Re-scan ~/.codex* and merge any newly discovered home into the saved list.
-#[no_mangle]
-pub extern "C" fn goRescanCodexAccounts() {
-    thread::spawn(|| {
+/// Once, on the first launch with the account store: move ~/.codex2… into it.
+fn migrate_codex_homes_once() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
         let mut cfg = config::load();
-        merge_discovered_accounts(&mut cfg);
+        if codex_accounts::migrate_homes(&mut cfg) {
+            let _ = config::save(&mut cfg);
+        }
+    });
+}
+
+/// "Add account": run the provider's own sign-in from here. Progress shows in
+/// Preferences; a kept account is fetched straight away.
+#[no_mangle]
+pub extern "C" fn goSignIn(provider: *const c_char) {
+    let provider = unsafe { cstr_to_string(provider) };
+    if let Err(e) = signin::start(&provider, push_ui_state, || {
+        thread::spawn(refresh_once);
+    }) {
+        eprintln!("tokue: {}", e);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn goCancelSignIn(provider: *const c_char) {
+    signin::cancel(&unsafe { cstr_to_string(provider) });
+}
+
+/// An account's name and whether it is shown in the panel.
+#[no_mangle]
+pub extern "C" fn goSetAccount(provider: *const c_char, key: *const c_char, label: *const c_char, shown: bool) {
+    let (provider, key, label) = unsafe { (cstr_to_string(provider), cstr_to_string(key), cstr_to_string(label)) };
+    thread::spawn(move || {
+        let mut cfg = config::load();
+        cfg.set_account(&provider, &key, label.trim(), shown);
         let _ = config::save(&mut cfg);
         refresh_once();
+    });
+}
+
+/// "Use in Codex": sign Codex in to a saved account; its previous account is
+/// saved in its place.
+#[no_mangle]
+pub extern "C" fn goCodexUseAccount(key: *const c_char) {
+    let key = unsafe { cstr_to_string(key) };
+    thread::spawn(move || {
+        match codex_accounts::use_in_codex(&key) {
+            Ok(()) => {
+                // Running Codex sessions keep the account they started with,
+                // which is easy to mistake for the switch not having worked.
+                state::set_card_notice(
+                    &key,
+                    Some("Codex now uses this account — restart running Codex sessions to switch them"),
+                );
+                refresh_once();
+                thread::sleep(Duration::from_secs(10));
+                state::set_card_notice(&key, None);
+                push_ui_state();
+            }
+            Err(e) => {
+                state::set_card_notice(&key, Some(&format!("Could not switch: {}", e)));
+                refresh_once();
+            }
+        }
+    });
+}
+
+/// Forget an account OCG keeps, with its display settings and any pin on it.
+/// A CLI's own login is left alone: that is signed out with the CLI.
+#[no_mangle]
+pub extern "C" fn goRemoveAccount(provider: *const c_char, key: *const c_char) {
+    let (provider, key) = unsafe { (cstr_to_string(provider), cstr_to_string(key)) };
+    thread::spawn(move || {
+        let removed = if provider == "codex" {
+            codex_accounts::remove(&key).is_ok()
+        } else {
+            accounts::remove(&provider, &key)
+        };
+        if removed {
+            let mut cfg = config::load();
+            cfg.forget_account(&provider, &key);
+            let _ = config::save(&mut cfg);
+        }
+        refresh_once();
+    });
+}
+
+/// Pin (or, passed an empty key, un-pin) which card drives `provider`'s menu
+/// bar badge — clicking an account card in a multi-account provider. Nothing
+/// needs re-fetching: the cache already has every account's data, so this
+/// just recomputes and re-pushes the already-cached numbers under the new
+/// selection.
+#[no_mangle]
+pub extern "C" fn goSetSelectedAccount(provider: *const c_char, key: *const c_char) {
+    let p = unsafe { cstr_to_string(provider) };
+    let k = unsafe { cstr_to_string(key) };
+    thread::spawn(move || {
+        let mut cfg = config::load();
+        cfg.set_selected_key(&p, if k.is_empty() { None } else { Some(&k) });
+        let _ = config::save(&mut cfg);
+        push_ui_state();
+    });
+}
+
+/// Start a provider's 5h window now — the "start window" button on a card.
+/// `key` is the card's meter key (a CODEX_HOME for Codex; the fixed card key
+/// for the single-login providers). Feedback rides on the card notice:
+/// "starting…" while the request runs, the failure reason if it fails, and
+/// nothing on success — the refresh that follows shows the fresh countdown,
+/// which is the real confirmation.
+#[no_mangle]
+pub extern "C" fn goStartWindow(provider: *const c_char, key: *const c_char) {
+    let provider = unsafe { cstr_to_string(provider) };
+    let key = unsafe { cstr_to_string(key) };
+    if key.is_empty() {
+        return;
+    }
+    thread::spawn(move || {
+        state::set_card_notice(&key, Some("Starting the 5h window…"));
+        push_ui_state();
+        let result = match provider.as_str() {
+            "codex" => fetch_codex::start_window(&key),
+            "minimax" => fetch_minimax::start_window(&config::load()),
+            "commandcode" => fetch_commandcode::start_window(),
+            "claude" => fetch_claude::start_window(),
+            "opencode" => fetch_opencode::start_window(&config::load(), &key),
+            other => Err(format!("no start action for {}", other)),
+        };
+        match result {
+            Ok(()) => state::set_card_notice(&key, None),
+            Err(e) => state::set_card_notice(&key, Some(&format!("Could not start window: {}", e))),
+        }
+        refresh_once();
+    });
+}
+
+/// Refresh interval from Preferences, in minutes (clamped to 1–240).
+#[no_mangle]
+pub extern "C" fn goSaveRefreshMinutes(minutes: u32) {
+    thread::spawn(move || {
+        let mut cfg = config::load();
+        cfg.refresh_minutes = Some(minutes.clamp(1, 240));
+        let _ = config::save(&mut cfg);
+        push_ui_state();
+    });
+}
+
+/// The system's first preferred language, from AppKit before goOnReady.
+#[no_mangle]
+pub extern "C" fn goSetSystemLanguage(tag: *const c_char) {
+    i18n::set_system_language(&unsafe { cstr_to_string(tag) });
+}
+
+/// Language from Preferences: "" (follow the system), "en" or "zh-Hans".
+/// Everything is translated on the way out, so no refetch is needed.
+#[no_mangle]
+pub extern "C" fn goSaveLanguage(setting: *const c_char) {
+    let setting = unsafe { cstr_to_string(setting) };
+    thread::spawn(move || {
+        let mut cfg = config::load();
+        cfg.language = match setting.as_str() {
+            i18n::ENGLISH | i18n::CHINESE => setting,
+            _ => String::new(),
+        };
+        let _ = config::save(&mut cfg);
+        push_ui_state();
     });
 }
 
@@ -400,7 +627,8 @@ pub extern "C" fn goQuitRequested() {
 /// Parse the Codex settings JSON sent by the settings view. Accepts the current
 /// object form ({"accounts": …, "show_spend": …}) and the older bare array.
 struct CodexSettings {
-    accounts: Vec<config::CodexAccount>,
+    /// Absent when only the display switches were sent.
+    accounts: Option<Vec<config::CodexAccount>>,
     show_spend: bool,
     show_remaining: bool,
     show_today: bool,
@@ -414,14 +642,17 @@ fn parse_codex_settings(json: &str) -> Option<CodexSettings> {
     };
     match &value {
         serde_json::Value::Array(_) => Some(CodexSettings {
-            accounts: parse_accounts(&value)?,
+            accounts: Some(parse_accounts(&value)?),
             show_spend: false,
             show_remaining: true,
             show_today: false,
             show_reset_credits: false,
         }),
         serde_json::Value::Object(map) => Some(CodexSettings {
-            accounts: parse_accounts(map.get("accounts")?)?,
+            accounts: match map.get("accounts") {
+                Some(a) => Some(parse_accounts(a)?),
+                None => None,
+            },
             show_spend: flag(map, "show_spend", false),
             show_remaining: flag(map, "show_remaining", true),
             show_today: flag(map, "show_today", false),
@@ -450,43 +681,21 @@ fn parse_accounts(value: &serde_json::Value) -> Option<Vec<config::CodexAccount>
     let array = value.as_array()?;
     let mut out: Vec<config::CodexAccount> = Vec::with_capacity(array.len());
     for entry in array {
-        let home = entry.get("home").and_then(|h| h.as_str()).unwrap_or_default();
-        if home.is_empty() {
+        let key = entry.get("key").and_then(|h| h.as_str()).unwrap_or_default();
+        if key.is_empty() {
             continue;
         }
         // Guard against duplicates in the payload.
-        if out.iter().any(|a| a.home == home) {
+        if out.iter().any(|a| a.key == key) {
             continue;
         }
         out.push(config::CodexAccount {
-            home: home.to_string(),
+            key: key.to_string(),
             label: entry.get("label").and_then(|l| l.as_str()).unwrap_or_default().to_string(),
             enabled: json_bool(entry.get("enabled"), true),
         });
     }
     Some(out)
-}
-
-/// Keep saved accounts (and their labels/enabled flags), appending any home
-/// discovered on disk that the config does not know about yet.
-fn merge_discovered_accounts(cfg: &mut config::Config) {
-    let known: Vec<String> = cfg
-        .codex
-        .accounts
-        .iter()
-        .map(|a| codex_accounts::expand_home(&a.home))
-        .collect();
-    for path in codex_accounts::discover_homes() {
-        let home = path.to_string_lossy().to_string();
-        if known.contains(&home) {
-            continue;
-        }
-        cfg.codex.accounts.push(config::CodexAccount {
-            home,
-            label: String::new(),
-            enabled: true,
-        });
-    }
 }
 
 /// Convert a borrowed C string to a Rust String. Returns "" on null.
@@ -517,15 +726,15 @@ mod tests {
     #[test]
     fn parses_account_list_payload() {
         let settings = parse_codex_settings(
-            r#"[{"home":"~/.codex","label":"main","enabled":true},
-                {"home":"~/.codex2","label":"","enabled":false},
-                {"home":"~/.codex","label":"dupe"},
-                {"label":"no home"}]"#,
+            r#"[{"key":"codex:a","label":"main","enabled":true},
+                {"key":"codex:b","label":"","enabled":false},
+                {"key":"codex:a","label":"dupe"},
+                {"label":"no key"}]"#,
         )
         .unwrap();
-        let accounts = settings.accounts;
+        let accounts = settings.accounts.unwrap();
         assert_eq!(accounts.len(), 2);
-        assert_eq!(accounts[0].home, "~/.codex");
+        assert_eq!(accounts[0].key, "codex:a");
         assert_eq!(accounts[0].label, "main");
         assert!(accounts[0].enabled);
         assert!(!accounts[1].enabled);
@@ -538,11 +747,11 @@ mod tests {
     #[test]
     fn parses_codex_settings_object() {
         let settings = parse_codex_settings(
-            r#"{"accounts":[{"home":"~/.codex","label":"","enabled":true}],
+            r#"{"accounts":[{"key":"codex:a","label":"","enabled":true}],
                 "show_spend":true,"show_remaining":false,"show_today":true}"#,
         )
         .unwrap();
-        assert_eq!(settings.accounts.len(), 1);
+        assert_eq!(settings.accounts.unwrap().len(), 1);
         assert!(settings.show_spend);
         assert!(!settings.show_remaining);
         assert!(settings.show_today);
@@ -552,14 +761,15 @@ mod tests {
     fn accepts_foundation_style_numeric_booleans() {
         // NSJSONSerialization writes @(NO) as 0, which used to re-enable accounts.
         let settings = parse_codex_settings(
-            r#"{"accounts":[{"home":"~/.codex","label":"","enabled":0},
-                            {"home":"~/.codex2","label":"","enabled":1}],
+            r#"{"accounts":[{"key":"codex:a","label":"","enabled":0},
+                            {"key":"codex:b","label":"","enabled":1}],
                 "show_spend":0,"show_remaining":1,"show_today":0,
                 "show_reset_credits":1}"#,
         )
         .unwrap();
-        assert!(!settings.accounts[0].enabled);
-        assert!(settings.accounts[1].enabled);
+        let accounts = settings.accounts.clone().unwrap();
+        assert!(!accounts[0].enabled);
+        assert!(accounts[1].enabled);
         assert!(!settings.show_spend);
         assert!(settings.show_remaining);
         assert!(!settings.show_today);
@@ -576,8 +786,9 @@ mod tests {
     #[test]
     fn rejects_malformed_account_list() {
         assert!(parse_codex_settings("not json").is_none());
-        assert!(parse_codex_settings("{}").is_none());
-        assert!(parse_codex_settings(r#"{"accounts":[]}"#).unwrap().accounts.is_empty());
-        assert!(parse_codex_settings("[]").unwrap().accounts.is_empty());
+        assert!(parse_codex_settings(r#"{"accounts":"nope"}"#).is_none());
+        assert!(parse_codex_settings(r#"{"accounts":[]}"#).unwrap().accounts.unwrap().is_empty());
+        assert!(parse_codex_settings("[]").unwrap().accounts.unwrap().is_empty());
+        assert!(parse_codex_settings(r#"{"show_spend":true}"#).unwrap().accounts.is_none(), "display switches alone keep the accounts");
     }
 }
