@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.svg" width="96" alt="tokue"></p>
+
 # tokue — AI quota in the macOS menu bar
 
 Multi-provider usage monitor for the macOS menu bar. Currently supports **OpenCode Go**, **DeepSeek** (balance), **MiniMax** (token plan quota), **Codex** (ChatGPT subscription usage, several accounts), **Command Code** (commandcode.ai credits and 5h/weekly windows) and **Claude** (claude.ai subscription windows). Click the menu bar icon to open a popover: a left sidebar switches between providers, the right pane shows that provider's usage as progress bars on a dark, fixed "terminal" surface (it does not follow system light/dark mode — that's deliberate). Settings live in their own standalone **Preferences** window (open it from the ⚙ in the popover header), not inside the popover itself. Accounts are added there by signing in — in the browser or with a device code — wherever the provider allows it, and by API key where it doesn't.
@@ -156,6 +158,7 @@ make        # builds tokue.app (requires Rust + Xcode CLT)
 make run    # builds and opens the app
 make build  # plain binary at target/release/tokue
 make dmg    # tokue-<version>.dmg: the app + an Applications link, signed ad hoc
+make icon   # redraw assets/AppIcon.icns from the logo (assets/logo.svg, assets/make-icon.swift)
 ```
 
 The disk image is built for Apple silicon only (arm64) and signed ad hoc, not with a Developer ID, so it is not notarized. On another Mac, Gatekeeper blocks the first launch of a downloaded copy: open it once, then allow it under **System Settings → Privacy & Security → Open Anyway** (or remove the quarantine flag: `xattr -dr com.apple.quarantine /Applications/tokue.app`).
@@ -163,6 +166,8 @@ The disk image is built for Apple silicon only (arm64) and signed ad hoc, not wi
 Requires Rust 1.80+ and Xcode Command Line Tools (for compiling the native AppKit shell and linking Cocoa). The Objective-C UI layer (`app_darwin.m`) is compiled via [`cc`](https://crates.io/crates/cc) in `build.rs`.
 
 ---
+
+**Version 0.0.7** — renamed from OCG to **tokue** (app, binary, `TOKUE_*` variables; data moved from `~/.config/ocg` to `~/.config/tokue` on first launch), with its own logo and app icon. Add account sign-in for Codex, Claude, Command Code and OpenCode Go (device code), Codex account switching from Preferences or the popover, a rebuilt per-provider Preferences window, an English / 简体中文 interface, and `make dmg`.
 
 **Version 0.0.6** — Command Code provider (credits + 5h/weekly windows), per-provider enable switches in settings, and configuration moved into the SQLite store.
 
