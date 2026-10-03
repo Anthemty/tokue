@@ -128,6 +128,16 @@ fn refresh_once() {
     push_ui_state();
 }
 
+/// After a settings change: show it at once, then refetch. The refetch waits
+/// behind any refresh already running (REFRESH_MU) — six providers, some of
+/// them slow — and until now nothing was pushed before it finished, so
+/// Preferences kept redrawing from the state before the change: a switch
+/// turned off sprang back on, and the next switch sent that stale value back.
+fn apply_then_refresh() {
+    push_ui_state();
+    refresh_once();
+}
+
 /// Spawn one thread per provider, collect results into the cache.
 fn fetch_all_providers() {
     let cfg = config::load();
@@ -394,12 +404,12 @@ pub extern "C" fn goSaveCredentials(
         };
         if matched {
             let _ = config::save(&mut cfg);
-            refresh_once();
+            apply_then_refresh();
         }
     });
 }
 
-/// Save the per-provider enable switches ({"opencode":true,…}) and refetch.
+/// Save provider enable switches ({"commandcode":false}, one or several) and refetch.
 #[no_mangle]
 pub extern "C" fn goSaveProviderEnabled(json: *const c_char) {
     let payload = unsafe { cstr_to_string(json) };
@@ -413,6 +423,9 @@ pub extern "C" fn goSaveProviderEnabled(json: *const c_char) {
             for (id, on) in map {
                 let enabled = on.as_bool().unwrap_or(true);
                 cfg.set_provider_enabled(id, enabled);
+                if !enabled {
+                    state::PROVIDER_CACHE.write().unwrap().remove(id);
+                }
                 if !enabled && cfg.active_provider == *id {
                     cfg.active_provider = cfg
                         .first_enabled_provider()
@@ -421,7 +434,7 @@ pub extern "C" fn goSaveProviderEnabled(json: *const c_char) {
                 }
             }
             let _ = config::save(&mut cfg);
-            refresh_once();
+            apply_then_refresh();
         }
     });
 }
@@ -442,7 +455,7 @@ pub extern "C" fn goSaveCodexAccounts(json: *const c_char) {
                 cfg.codex.show_today = settings.show_today;
                 cfg.codex.show_reset_credits = settings.show_reset_credits;
                 let _ = config::save(&mut cfg);
-                refresh_once();
+                apply_then_refresh();
             }
             None => eprintln!("tokue: ignoring malformed codex settings payload"),
         }
@@ -486,7 +499,7 @@ pub extern "C" fn goSetAccount(provider: *const c_char, key: *const c_char, labe
         let mut cfg = config::load();
         cfg.set_account(&provider, &key, label.trim(), shown);
         let _ = config::save(&mut cfg);
-        refresh_once();
+        apply_then_refresh();
     });
 }
 
@@ -504,14 +517,14 @@ pub extern "C" fn goCodexUseAccount(key: *const c_char) {
                     &key,
                     Some("Codex now uses this account — restart running Codex sessions to switch them"),
                 );
-                refresh_once();
+                apply_then_refresh();
                 thread::sleep(Duration::from_secs(10));
                 state::set_card_notice(&key, None);
                 push_ui_state();
             }
             Err(e) => {
                 state::set_card_notice(&key, Some(&format!("Could not switch: {}", e)));
-                refresh_once();
+                apply_then_refresh();
             }
         }
     });
@@ -533,7 +546,7 @@ pub extern "C" fn goRemoveAccount(provider: *const c_char, key: *const c_char) {
             cfg.forget_account(&provider, &key);
             let _ = config::save(&mut cfg);
         }
-        refresh_once();
+        apply_then_refresh();
     });
 }
 
@@ -582,7 +595,7 @@ pub extern "C" fn goStartWindow(provider: *const c_char, key: *const c_char) {
             Ok(()) => state::set_card_notice(&key, None),
             Err(e) => state::set_card_notice(&key, Some(&format!("Could not start window: {}", e))),
         }
-        refresh_once();
+        apply_then_refresh();
     });
 }
 

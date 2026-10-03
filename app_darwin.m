@@ -55,7 +55,8 @@ static NSString *OCGT(NSString *english) {
     @"Last refreshed" : @"上次刷新",
     @"Refresh" : @"刷新",
     @"Preferences" : @"偏好设置",
-    @"Quit" : @"退出",
+    @"Preferences…" : @"偏好设置…",
+    @"Quit tokue" : @"退出 tokue",
     @"OpenCode Go windows. Sign in with your OpenCode console account, or use an API key." : @"OpenCode Go 用量窗口。用 OpenCode 控制台账户登录，或使用 API key。",
     @"Account balance, read with an API key from platform.deepseek.com." : @"账户余额，用 platform.deepseek.com 的 API key 读取。",
     @"Token Plan windows, read with the plan's Subscription Key." : @"Token Plan 用量窗口，用套餐的 Subscription Key 读取。",
@@ -1588,8 +1589,8 @@ static NSDictionary *OCGLogoSpecForProvider(NSString *providerID) {
   updated.translatesAutoresizingMaskIntoConstraints = NO;
   [row addSubview:updated];
 
-  // A quick refresh right next to Preferences — always in view, no more
-  // hunting for a footer button below a tall account list.
+  // A quick refresh, always in view. Preferences and Quit are app-wide, so
+  // they live on the status item's right-click menu, not in the panel.
   NSButton *refresh =
       [NSButton buttonWithTitle:@"" target:self action:@selector(refreshClicked:)];
   refresh.image = [NSImage imageWithSystemSymbolName:@"arrow.clockwise"
@@ -1600,27 +1601,6 @@ static NSDictionary *OCGLogoSpecForProvider(NSString *providerID) {
   refresh.translatesAutoresizingMaskIntoConstraints = NO;
   [row addSubview:refresh];
 
-  // Opens the standalone Preferences window — the popover only ever shows
-  // the usage view now, so this is always a gear, never a back chevron.
-  NSButton *gear =
-      [NSButton buttonWithTitle:@"" target:self action:@selector(toggleSettings:)];
-  gear.image = [NSImage imageWithSystemSymbolName:@"gearshape" accessibilityDescription:OCGT(@"Preferences")];
-  gear.imagePosition = NSImageOnly;
-  gear.bordered = NO;
-  gear.contentTintColor = OCGTextSecondary();
-  gear.translatesAutoresizingMaskIntoConstraints = NO;
-  [row addSubview:gear];
-
-  // Quit lives here now, as a top-right close button — no footer, no
-  // separate Quit row; the corner "×" is the standard place to look for it.
-  NSButton *close =
-      [NSButton buttonWithTitle:@"" target:self action:@selector(quitClicked:)];
-  close.image = [NSImage imageWithSystemSymbolName:@"xmark" accessibilityDescription:OCGT(@"Quit")];
-  close.imagePosition = NSImageOnly;
-  close.bordered = NO;
-  close.contentTintColor = OCGTextSecondary();
-  close.translatesAutoresizingMaskIntoConstraints = NO;
-  [row addSubview:close];
 
   [NSLayoutConstraint activateConstraints:@[
     [title.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:16],
@@ -1628,15 +1608,7 @@ static NSDictionary *OCGLogoSpecForProvider(NSString *providerID) {
     [updated.leadingAnchor constraintEqualToAnchor:title.trailingAnchor constant:8],
     [updated.firstBaselineAnchor constraintEqualToAnchor:title.firstBaselineAnchor],
     [updated.trailingAnchor constraintLessThanOrEqualToAnchor:refresh.leadingAnchor constant:-6],
-    [close.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-12],
-    [close.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
-    [close.widthAnchor constraintEqualToConstant:27],
-    [close.heightAnchor constraintEqualToConstant:27],
-    [gear.trailingAnchor constraintEqualToAnchor:close.leadingAnchor constant:-4],
-    [gear.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
-    [gear.widthAnchor constraintEqualToConstant:27],
-    [gear.heightAnchor constraintEqualToConstant:27],
-    [refresh.trailingAnchor constraintEqualToAnchor:gear.leadingAnchor constant:-4],
+    [refresh.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-12],
     [refresh.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
     [refresh.widthAnchor constraintEqualToConstant:27],
     [refresh.heightAnchor constraintEqualToConstant:27],
@@ -1668,10 +1640,6 @@ static NSDictionary *OCGLogoSpecForProvider(NSString *providerID) {
   goRefreshRequested();
 }
 
-- (void)quitClicked:(id)sender {
-  goQuitRequested();
-  [NSApp terminate:nil];
-}
 
 @end
 
@@ -2219,10 +2187,9 @@ static NSString *OCGSourceLabel(NSString *provider, NSDictionary *account) {
 }
 
 - (void)providerToggled:(OCGToggle *)sender {
-  NSMutableDictionary *payload = [NSMutableDictionary dictionary];
-  for (NSDictionary *p in self.state[@"providers"] ?: @[]) {
-    payload[p[@"id"]] = @([p[@"id"] isEqualToString:sender.identifier] ? sender.isOn : [p[@"enabled"] boolValue]);
-  }
+  // Only the switch that changed: the others' values in self.state may be
+  // older than what is saved, and sending them would undo a recent change.
+  NSDictionary *payload = @{sender.identifier ?: @"" : sender.isOn ? @YES : @NO};
   NSData *data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
   if (data != nil) {
     goSaveProviderEnabled([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding].UTF8String);
@@ -2545,7 +2512,9 @@ static NSString *OCGSourceLabel(NSString *provider, NSDictionary *account) {
   self.statusItem =
       [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
   self.statusItem.button.target = self;
-  self.statusItem.button.action = @selector(togglePopover:);
+  self.statusItem.button.action = @selector(statusItemClicked:);
+  // Left click opens the panel; right click (or control-click) the app menu.
+  [self.statusItem.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];
   // No icon until the first refresh pushes a template gauge icon.
 
   self.controller = [[UsagePanelController alloc] init];
@@ -2580,6 +2549,44 @@ static NSString *OCGSourceLabel(NSString *provider, NSDictionary *account) {
                      [self togglePopover:nil];
                    });
   }
+}
+
+- (void)statusItemClicked:(id)sender {
+  NSEvent *event = NSApp.currentEvent;
+  BOOL menu = event.type == NSEventTypeRightMouseUp ||
+              (event.modifierFlags & NSEventModifierFlagControl) != 0;
+  if (menu) {
+    [self showStatusMenu];
+  } else {
+    [self togglePopover:sender];
+  }
+}
+
+/// Preferences and Quit: app-wide, so on the status item, not in the panel.
+/// The menu is attached only while it is open — a status item with a menu
+/// shows it on every click, and a left click has to keep opening the panel.
+- (void)showStatusMenu {
+  if (self.popover.shown) {
+    [self.popover performClose:nil];
+  }
+  NSMenu *menu = [[NSMenu alloc] init];
+  NSMenuItem *prefs = [menu addItemWithTitle:OCGT(@"Preferences…")
+                                      action:@selector(showPreferencesWindow)
+                               keyEquivalent:@","];
+  prefs.target = self;
+  [menu addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *quit = [menu addItemWithTitle:OCGT(@"Quit tokue")
+                                     action:@selector(quitApp:)
+                              keyEquivalent:@"q"];
+  quit.target = self;
+  self.statusItem.menu = menu;
+  [self.statusItem.button performClick:nil]; // runs the menu until it closes
+  self.statusItem.menu = nil;
+}
+
+- (void)quitApp:(id)sender {
+  goQuitRequested();
+  [NSApp terminate:nil];
 }
 
 - (void)togglePopover:(id)sender {
